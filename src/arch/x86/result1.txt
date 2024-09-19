@@ -1,0 +1,11 @@
+Global frequency set at 1000000000000 ticks per second
+gem5 Simulator System.  http://gem5.org
+gem5 is copyrighted software; use the --copyright option for details.
+
+gem5 version 20.1.0.0
+gem5 compiled May  3 2023 02:30:45
+gem5 started May  3 2023 02:36:32
+gem5 executing on 70e82cee7754, pid 136101
+command line: /home/dokto76/gem5_dev7/build/X86/gem5.opt --debug-flags=ExecAll --debug-start=8517870000 --debug-end=8518100000 /home/dokto76/gem5_dev7/configs/benchmark/HPCG-intel/hpcg-gcc-avx-mkl.py
+
+Beginning simulation!

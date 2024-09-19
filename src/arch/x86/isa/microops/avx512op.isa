@@ -1,0 +1,1494 @@
+// Copyright (c) 2009 The Regents of The University of Michigan
+// Copyright (c) 2015 Advanced Micro Devices, Inc.
+//
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met: redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer;
+// redistributions in binary form must reproduce the above copyright
+// notice, this list of conditions and the following disclaimer in the
+// documentation and/or other materials provided with the distribution;
+// neither the name of the copyright holders nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// 
+
+def template AVX512OpExecute {{
+        Fault %(class_name)s::execute(ExecContext *xc,
+                Trace::InstRecord *traceData) const
+        {
+            Fault fault = NoFault;
+
+            %(op_decl)s;
+            %(op_rd)s;
+
+            %(code)s;
+
+            //Write the resulting state to the execution context
+            if(fault == NoFault)
+            {
+                %(op_wb)s;
+            }
+            return fault;
+        }
+}};
+
+def template AVX512OpRegDeclare {{
+    class %(class_name)s : public %(base_class)s
+    {
+      public:
+        %(class_name)s(ExtMachInst _machInst,
+                const char * instMnem, uint64_t setFlags,
+                InstRegIndex _src1, InstRegIndex _src2,
+                InstRegIndex _src3, InstRegIndex _dest, InstRegIndex _opmask,
+                uint8_t _srcSize, uint8_t _destSize, uint16_t _ext);
+
+        Fault execute(ExecContext *, Trace::InstRecord *) const;
+    };
+}};
+
+def template AVX512OpImmDeclare {{
+
+    class %(class_name)s : public %(base_class)s
+    {
+      public:
+        %(class_name)s(ExtMachInst _machInst,
+                const char * instMnem, uint64_t setFlags,
+                InstRegIndex _src1, InstRegIndex _src2,
+                uint16_t _imm8, InstRegIndex _dest, InstRegIndex _opmask,
+                uint8_t _srcSize, uint8_t _destSize, uint16_t _ext);
+
+        Fault execute(ExecContext *, Trace::InstRecord *) const;
+    };
+}};
+
+def template AVX512OpRegConstructor {{
+    %(class_name)s::%(class_name)s(
+            ExtMachInst machInst, const char * instMnem, uint64_t setFlags,
+            InstRegIndex _src1, InstRegIndex _src2,
+            InstRegIndex _src3, InstRegIndex _dest, InstRegIndex _opmask,
+            uint8_t _srcSize, uint8_t _destSize, uint16_t _ext) :
+        %(base_class)s(machInst, "%(mnemonic)s", instMnem, setFlags,
+                _src1, _src2, _src3, _dest, _opmask,
+                _srcSize, _destSize, _ext, %(op_class)s)
+    {
+        %(constructor)s;
+    }
+}};
+
+def template AVX512OpImmConstructor {{
+    %(class_name)s::%(class_name)s(
+            ExtMachInst machInst, const char * instMnem, uint64_t setFlags,
+            InstRegIndex _src1, InstRegIndex _src2,
+            uint16_t _imm8, InstRegIndex _dest, InstRegIndex _opmask,
+            uint8_t _srcSize, uint8_t _destSize, uint16_t _ext) :
+        %(base_class)s(machInst, "%(mnemonic)s", instMnem, setFlags,
+                _src1, _src2, _imm8, _dest, _opmask,
+                _srcSize, _destSize, _ext, %(op_class)s)
+    {
+        %(constructor)s;
+    }
+}};
+
+let {{
+    # Make these empty strings so that concatenating onto
+    # them will always work.
+    header_output = ""
+    decoder_output = ""
+    exec_output = ""
+
+    immTemplates = (
+            AVX512OpImmDeclare,
+            AVX512OpImmConstructor,
+            AVX512OpExecute)
+
+    regTemplates = (
+            AVX512OpRegDeclare,
+            AVX512OpRegConstructor,
+            AVX512OpExecute)
+
+    class AVX512OpMeta(type):
+        def buildCppClasses(self, name, Name, suffix, code):
+
+            # Globals to stick the output in
+            global header_output
+            global decoder_output
+            global exec_output
+
+            # If op2 is used anywhere, make register and immediate versions
+            # of this code.
+            matcher = re.compile(r"(?<!\w)(?P<prefix>s?)op2(?P<typeQual>_[^\W_]+)?")
+            match = matcher.search(code)
+            if match:
+                typeQual = ""
+                if match.group("typeQual"):
+                    typeQual = match.group("typeQual")
+                src3_name = "%sFpSrcReg3%s" % (match.group("prefix"), typeQual)
+                self.buildCppClasses(name, Name, suffix,
+                        matcher.sub(src3_name, code))
+                self.buildCppClasses(name + "i", Name, suffix + "Imm",
+                        matcher.sub("imm8", code))
+                return
+
+            base = "X86ISA::AVX512Op"
+
+            # If imm8 shows up in the code, use the immediate templates, if
+            # not, hopefully the register ones will be correct.
+            matcher = re.compile("(?<!\w)imm8(?!\w)")
+            if matcher.search(code):
+                base += "Imm"
+                templates = immTemplates
+            else:
+                base += "Reg"
+                templates = regTemplates
+
+            # Get everything ready for the substitution
+            opt_args = []
+            if self.op_class:
+                opt_args.append(self.op_class)
+            iop = InstObjParams(name, Name + suffix, base, {"code" : code},
+                                opt_args)
+
+            # Generate the actual code (finally!)
+            header_output += templates[0].subst(iop)
+            decoder_output += templates[1].subst(iop)
+            exec_output += templates[2].subst(iop)
+
+
+        def __new__(mcls, Name, bases, dict):
+            abstract = False
+            name = Name.lower()
+            if "abstract" in dict:
+                abstract = dict['abstract']
+                del dict['abstract']
+            if not "op_class" in dict:
+                dict["op_class"] = None
+
+            cls = super(AVX512OpMeta, mcls).__new__(mcls, Name, bases, dict)
+            if not abstract:
+                cls.className = Name
+                cls.base_mnemonic = name
+                code = cls.code
+
+                # Set up the C++ classes
+                mcls.buildCppClasses(cls, name, Name, "", code)
+
+                # Hook into the microassembler dict
+                global microopClasses
+                microopClasses[name] = cls
+
+                # If op2 is used anywhere, make register and immediate versions
+                # of this code.
+                matcher = re.compile(r"op2(?P<typeQual>_[^\W_]+)?")
+                if matcher.search(code):
+                    microopClasses[name + 'i'] = cls
+            return cls
+
+    @six.add_metaclass(AVX512OpMeta)
+    class AVX512Op(X86Microop):
+        # This class itself doesn't act as a microop
+        abstract = True
+
+        def __init__(self, dest, src1, src2, op2 = "InstRegIndex(0)",
+                opmask = "InstRegIndex(0)",
+                size = None, destSize = None, srcSize = None, ext = None):
+            self.dest = dest
+            self.src1 = src1
+            self.src2 = src2
+            self.op2 = op2
+            self.opmask = opmask
+            self.srcSize = srcSize if srcSize is not None else 0
+            self.destSize = destSize if destSize is not None else 0
+            self.ext = ext if ext is not None else 0
+
+            if size is not None:
+                self.srcSize = size
+                self.destSize = size
+            else:
+                self.size = 0
+
+            if self.srcSize is None:
+                raise Exception("Source size not set.")
+            if self.destSize is None:
+                raise Exception("Dest size not set.")
+
+        def getAllocator(self, microFlags):
+            className = self.className
+            if self.mnemonic == self.base_mnemonic + 'i':
+                className += "Imm"
+            allocator = '''new %(class_name)s(machInst, macrocodeBlock,
+                    %(flags)s, %(src1)s, %(src2)s, %(op2)s,
+                    %(dest)s, %(opmask)s,
+                    %(srcSize)s, %(destSize)s, %(ext)s)''' % {
+                    "class_name" : className,
+                    "flags" : self.microFlagsText(microFlags),
+                    "src1" : self.src1,
+                    "src2" : self.src2,
+                    "op2" : self.op2,
+                    "dest" : self.dest,
+                    "opmask" : self.opmask,
+                    "srcSize" : self.srcSize,
+                    "destSize" : self.destSize,
+                    "ext" : self.ext}
+            return allocator
+
+    class gem5_mask_add_ps(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_sf[i] + VecSrcReg2_sf[i]) :
+                            ((zeroing) ? (0.0) : (VecSrcReg3_sf[i]));
+            }
+        '''
+
+    class gem5_mask_add_pd(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_df[i] + VecSrcReg2_df[i]) :
+                            ((zeroing) ? (0.0) : (VecSrcReg3_df[i]));
+            }
+        '''
+
+    class gem5_mask_add_epi32(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_sdw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sdw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_sdw[i] + VecSrcReg2_sdw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_sdw[i]));
+            }
+        '''
+
+    class gem5_mask_add_epi64(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_sqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sqw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_sqw[i] + VecSrcReg2_sqw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_sqw[i]));
+            }
+        '''
+
+    class gem5_mask_sub_ps(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                                   (VecSrcReg1_sf[i] - VecSrcReg2_sf[i]) :
+                                   ((zeroing) ? (0.0) : (VecSrcReg3_sf[i]));
+            }
+        '''
+
+    class gem5_mask_sub_pd(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                                   (VecSrcReg1_df[i] - VecSrcReg2_df[i]) :
+                                   ((zeroing) ? (0.0) : (VecSrcReg3_df[i]));
+            }
+        '''
+
+    class gem5_mask_sub_epi32(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_sdw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sdw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_sdw[i] - VecSrcReg2_sdw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_sdw[i]));
+            }
+        '''
+
+    class gem5_mask_sub_epi64(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_sqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sqw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_sqw[i] - VecSrcReg2_sqw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_sqw[i]));
+            }
+        '''
+
+    class gem5_mask_sub_epu32(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_udw[i] - VecSrcReg2_udw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_udw[i]));
+            }
+        '''
+
+    class gem5_mask_sub_epu64(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_uqw[i] - VecSrcReg2_uqw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_uqw[i]));
+            }
+        '''
+
+    class gem5_mask_mul_ps(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                                   (VecSrcReg1_sf[i] * VecSrcReg2_sf[i]) :
+                                   ((zeroing) ? (0.0) : (VecSrcReg3_sf[i]));
+            }
+        '''
+
+    class gem5_mask_mul_pd(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_df[i] * VecSrcReg2_df[i]) :
+                            ((zeroing) ? (0.0) : (VecSrcReg3_df[i]));
+            }
+        '''
+
+    class gem5_mask_mullo_epi32(AVX512Op):
+        op_class = 'SimdMultOp'
+        code = '''
+            auto tempDest = Iu32xMaxDest_maxudw;
+            Iu32xMaxDest_maxudw = { 0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++)
+                Iu32xMaxDest_maxudw[i] = ( bits(OpWriteMask, i) ) ?
+                        (Is32xMaxSrc1_maxsdw[i] * Is32xMaxSrc2_maxsdw[i]) & mask(32) :
+                        (zeroing ? 0 : tempDest[i]);
+        '''
+
+    class gem5_mask_div_ps(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                                   (VecSrcReg1_sf[i] / VecSrcReg2_sf[i]) :
+                                   ((zeroing) ? (0.0) : (VecSrcReg3_sf[i]));
+            }
+        '''
+
+    class gem5_mask_div_pd(AVX512Op):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_df[i] / VecSrcReg2_df[i]) :
+                            ((zeroing) ? (0.0) : (VecSrcReg3_df[i]));
+            }
+        '''
+
+    class gem5_mask_min_ps(AVX512Op):
+        op_class = 'SimdFloatCmpOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                        min(VecSrcReg1_sf[i], VecSrcReg2_sf[i]) :
+                        ((zeroing) ? (0.0) : (VecSrcReg3_sf[i]));
+            }
+        '''
+
+    class gem5_mask_min_pd(AVX512Op):
+        op_class = 'SimdFloatCmpOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                        min(VecSrcReg1_df[i], VecSrcReg2_df[i]) :
+                        ((zeroing) ? (0.0) : (VecSrcReg3_df[i]));
+            }
+        '''
+
+    class gem5_mask_max_ps(AVX512Op):
+        op_class = 'SimdFloatCmpOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                        max(VecSrcReg1_sf[i], VecSrcReg2_sf[i]) :
+                        ((zeroing) ? (0.0) : (VecSrcReg3_sf[i]));
+            }
+        '''
+
+    class gem5_mask_max_pd(AVX512Op):
+        op_class = 'SimdFloatCmpOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                        max(VecSrcReg1_df[i], VecSrcReg2_df[i]) :
+                        ((zeroing) ? (0.0) : (VecSrcReg3_df[i]));
+            }
+        '''
+
+    class gem5_mask_max_epi32(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            VecDestReg_sdw = { 0 };
+            int count = (zmmOp()) ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++)
+                VecDestReg_sdw[i] = ( bits(OpWriteMask, i) ) ?
+                            max(VecSrcReg1_sdw[i],VecSrcReg2_sdw[i]) :
+                            ((zeroing) ? (0.0) : (VecSrcReg3_sdw[i]));
+        '''
+
+    class gem5_mask_max_epi64(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            VecDestReg_sqw = { 0 };
+            int count = (zmmOp()) ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++)
+                VecDestReg_sqw[i] = ( bits(OpWriteMask, i) ) ?
+                            max(VecSrcReg1_sqw[i],VecSrcReg2_sqw[i]) :
+                            ((zeroing) ? (0.0) : (VecSrcReg3_sqw[i]));
+        '''
+
+    class gem5_mask_xor_epu32(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_udw[i] ^ VecSrcReg2_udw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_udw[i]));
+            }
+        '''
+
+    class gem5_mask_xor_epu64(AVX512Op):
+        op_class = 'SimdAddOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                            (VecSrcReg1_uqw[i] + VecSrcReg2_uqw[i]) :
+                            ((zeroing) ? (0) : (VecSrcReg3_uqw[i]));
+            }
+        '''
+
+    class gem5_mask_cmpgt_epi32(AVX512Op):
+        op_class = 'SimdCvtOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                int32_t arg1 = VecSrcReg1_sdw[i];
+                int32_t arg2 = VecSrcReg2_sdw[i];
+                if( bits(OpWriteMask, i) && (arg1 > arg2) )
+                    OpMaskDestReg |= (mask(1) << i);
+                // else if( !zeroing ) zeroing mask only
+            }
+        '''
+
+    class gem5_mask_cmpeq_epi32(AVX512Op):
+        op_class = 'SimdCvtOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                int64_t arg1 = VecSrcReg1_sdw[i];
+                int64_t arg2 = VecSrcReg2_sdw[i];
+                if( bits(OpWriteMask, i) && (arg1 == arg2) )
+                    OpMaskDestReg |= (mask(1) << i);
+                // else if( !zeroing ) zeroing mask only
+            }
+        '''
+
+    # zeroing mask only
+    class gem5_mask_cmp_pd(AVX512Op):
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            int sizeBits = 1;
+            int cnt = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            OpMaskDestReg = 0;
+            for(int i=0; i<cnt; i++) {
+                double arg1 = VecSrcReg1_df[i];
+                double arg2 = VecSrcReg2_df[i];
+                bool nanop = std::isnan(arg1) || std::isnan(arg2);
+                uint64_t resBits = 0;
+                switch( ext & mask(5)) {
+                case 0x00:
+                case 0x10:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( arg1 == arg2 ) resBits = mask(sizeBits);
+                        if ( nanop ) resBits = 0;
+                    }
+                    break;
+                case 0x01:
+                case 0x11:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( arg1 < arg2 ) resBits = mask(sizeBits);
+                        if ( nanop ) resBits = 0;
+                    }
+                    break;
+                case 0x02:
+                case 0x12:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( arg1 <= arg2 ) resBits = mask(sizeBits);
+                        if ( nanop ) resBits = 0;
+                    }
+                    break;
+                case 0x03:
+                case 0x13:
+                    if( bits(OpWriteMask, i) ) {
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x04:
+                case 0x14:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( !(arg1 == arg2) ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x05:
+                case 0x15:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( !(arg1 < arg2) ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x06:
+                case 0x16:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( !(arg1 <= arg2) ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x07:
+                case 0x17:
+                    if( bits(OpWriteMask, i) ) {
+                        if (!nanop) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x08:
+                case 0x18:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( arg1 == arg2 ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x09:
+                case 0x19:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( arg1 < arg2 ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x0A:
+                case 0x1A:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( arg1 <= arg2 ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = mask(sizeBits);
+                    }
+                    break;
+                case 0x0B:
+                case 0x1B:
+                    // do nothing
+                    break;
+                case 0x0C:
+                case 0x1C:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( !(arg1 == arg2) ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = 0;
+                    }
+                    break;
+                case 0x0D:
+                case 0x1D:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( !(arg1 < arg2) ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = 0;
+                    }
+                    break;
+                case 0x0E:
+                case 0x1E:
+                    if( bits(OpWriteMask, i) ) {
+                        if ( !(arg1 <= arg2) ) resBits = mask(sizeBits);
+                        if( nanop ) resBits = 0;
+                    }
+                    break;
+                case 0x0F:
+                case 0x1F:
+                    if( bits(OpWriteMask, i) ) {
+                        resBits = mask(sizeBits);
+                    }
+                    break;
+                };
+                OpMaskDestReg |= ( resBits << i );
+            }
+        '''
+
+    class gem5_mask_blend_epi32(AVX512Op):
+        op_class = 'SimdMiscOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++)
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                        (VecSrcReg2_udw[i]) :
+                        (zeroing ? 0 : VecSrcReg1_udw[i]);
+        '''
+
+    class gem5_mask_blend_epi64(AVX512Op):
+        op_class = 'SimdMiscOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++)
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                        (VecSrcReg2_uqw[i]) :
+                        (zeroing ? 0 : VecSrcReg1_uqw[i]);
+        '''
+
+    class gem5_mask_move_epu32(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; ++i) {
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                                    ( VecSrcReg1_udw[i] ) :
+                                    ( zeroing ? 0 : VecSrcReg2_udw[i] );
+            }
+        '''
+
+    class gem5_mask_move_epu64(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; ++i) {
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                                    ( VecSrcReg1_uqw[i] ) :
+                                    ( zeroing ? 0 : VecSrcReg2_uqw[i] );
+            }
+        '''
+
+    class gem5_mask_broadcast_ss(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                                    ( VecSrcReg1_udw[0] ) :
+                                    ( zeroing ? 0 : VecSrcReg2_udw[i] );
+            }
+        '''
+
+    class gem5_mask_broadcast_sd(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                                    ( VecSrcReg1_uqw[0] ) :
+                                    ( zeroing ? 0 : VecSrcReg2_uqw[i] );
+            }
+        '''
+
+    class gem5_mask_broadcast(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            int maskBits = 8 * srcSize;
+            int elemCount = 8 / srcSize;
+            uint64_t arg1 = VecSrcReg1_uqw[0] & mask(maskBits);
+
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                uint64_t result = 0;
+                for(int j=0; j<elemCount; j++) {
+                    result |= ( bits(OpWriteMask, i*elemCount+j) ) ?
+                              ( arg1 << (maskBits*j) ) :
+                              ( zeroing ? 0 : (VecSrcReg2_uqw[i] & (mask(maskBits) << (maskBits*j))) );
+                }
+                VecDestReg_uqw[i] = result;
+            }
+        '''
+
+    class gem5_mask_set1(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            int maskBits = 8 * srcSize;
+            int elemCount = 8 / srcSize;
+            uint64_t arg1 = SrcReg1_uqw & mask(maskBits);
+
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                uint64_t result = 0;
+                for(int j=0; j<elemCount; j++) {
+                    result |= ( bits(OpWriteMask, i*elemCount+j) ) ?
+                              ( arg1 << (maskBits*j) ) :
+                              ( zeroing ? 0 : (VecSrcReg2_uqw[i] & (mask(maskBits) << (maskBits*j))) );
+                }
+                VecDestReg_uqw[i] = result;
+            }
+        '''
+
+    class gem5_mask_permutexvar_epi32(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : 8;
+            int maskBits = zmmOp() ? 4 : 3;
+            for(int i=0; i<count; i++) {
+                uint8_t arg1 = VecSrcReg1_udw[i] & mask(maskBits);
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                                    (VecSrcReg2_udw[arg1]) :
+                                    ((zeroing) ? (0) : (VecSrcReg3_udw[i]));
+            }
+        '''
+
+    class gem5_mask_permutexvar_epi64(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : 4;
+            int maskBits = zmmOp() ? 3 : 2;
+            for(int i=0; i<count; i++) {
+                uint8_t arg1 = VecSrcReg1_uqw[i] & mask(maskBits);
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                                    (VecSrcReg2_uqw[arg1]) :
+                                    ((zeroing) ? (0) : (VecSrcReg3_uqw[i]));
+            }
+        '''
+
+    class gem5_evex_permutex2var1_epi32(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = (zmmOp()) ? 16 : ((ymmOp()) ? 8 : 4);
+            int maskBits = (zmmOp()) ? 4 : ((ymmOp()) ? 3 : 2);
+            for(int i=0; i<count; i++) {
+                uint8_t idx = VecSrcReg1_udw[i] & mask(maskBits);
+                uint8_t sel = bits(VecSrcReg1_udw[i], maskBits);
+                VecDestReg_udw[i] = ( sel ) ?
+                    (VecSrcReg3_udw[idx]) : (VecSrcReg2_udw[idx]);
+            }
+        '''
+
+    class gem5_evex_permutex2var1_epi64(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            int maskBits = zmmOp() ? 3 : (ymmOp() ? 2 : 1);
+            for(int i=0; i<count; i++) {
+                uint8_t idx = VecSrcReg1_uqw[i] & mask(maskBits);
+                uint8_t sel = bits(VecSrcReg1_uqw[i], maskBits);
+                VecDestReg_uqw[i] = ( sel ) ?
+                    (VecSrcReg3_uqw[idx]) : (VecSrcReg2_uqw[idx]);
+            }
+        '''
+
+    class gem5_evex_permutex2var2_epi32(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = (zmmOp()) ? 16 : ((ymmOp()) ? 8 : 4);
+            int maskBits = (zmmOp()) ? 4 : ((ymmOp()) ? 3 : 2);
+            for(int i=0; i<count; i++) {
+                uint8_t idx = VecSrcReg2_udw[i] & mask(maskBits);
+                uint8_t sel = bits(VecSrcReg2_udw[i], maskBits);
+                VecDestReg_udw[i] = ( sel ) ?
+                    (VecSrcReg3_udw[idx]) : (VecSrcReg1_udw[idx]);
+            }
+        '''
+
+    class gem5_evex_permutex2var2_epi64(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            int maskBits = zmmOp() ? 3 : (ymmOp() ? 2 : 1);
+            for(int i=0; i<count; i++) {
+                uint8_t idx = VecSrcReg2_uqw[i] & mask(maskBits);
+                uint8_t sel = bits(VecSrcReg2_uqw[i], maskBits);
+                VecDestReg_uqw[i] = ( sel ) ?
+                    (VecSrcReg3_uqw[idx]) : (VecSrcReg1_uqw[idx]);
+            }
+        '''
+
+    class gem5_mask_fmadd132_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg1_sf[i] *
+                             (double) VecSrcReg3_sf[i] +
+                             (double) VecSrcReg2_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fmadd213_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg1_sf[i] +
+                             (double) VecSrcReg3_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fmadd231_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg3_sf[i] +
+                             (double) VecSrcReg1_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fmadd132_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg1_df[i] *
+                             (__float128) VecSrcReg3_df[i] +
+                             (__float128) VecSrcReg2_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fmadd213_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg1_df[i] +
+                             (__float128) VecSrcReg3_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fmadd231_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg3_df[i] +
+                             (__float128) VecSrcReg1_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fnmadd132_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg2_sf[i] -
+                             (double) VecSrcReg1_sf[i] *
+                             (double) VecSrcReg3_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fnmadd213_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg3_sf[i] -
+                             (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg1_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fnmadd231_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg1_sf[i] -
+                             (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg3_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fnmadd132_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg2_df[i] -
+                             (__float128) VecSrcReg1_df[i] *
+                             (__float128) VecSrcReg3_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+
+            }
+        '''
+
+    class gem5_mask_fnmadd213_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg3_df[i] -
+                             (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg1_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fnmadd231_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg1_df[i] -
+                             (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg3_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fmsub132_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg1_sf[i] *
+                             (double) VecSrcReg3_sf[i] -
+                             (double) VecSrcReg2_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fmsub213_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg1_sf[i] -
+                             (double) VecSrcReg3_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fmsub231_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg3_sf[i] -
+                             (double) VecSrcReg1_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fmsub132_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg3_df[i] -
+                             (__float128) VecSrcReg1_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fmsub213_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg1_df[i] -
+                             (__float128) VecSrcReg3_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fmsub231_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) VecSrcReg2_df[i] *
+                             (__float128) VecSrcReg3_df[i] -
+                             (__float128) VecSrcReg1_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fnmsub132_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) -VecSrcReg2_sf[i] -
+                             (double) VecSrcReg1_sf[i] *
+                             (double) VecSrcReg3_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fnmsub213_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) -VecSrcReg3_sf[i] -
+                             (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg1_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fnmsub231_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = (zmmOp()) ? 16 : ( (ymmOp()) ? 8 : 4 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_sf[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (double) -VecSrcReg1_sf[i] -
+                             (double) VecSrcReg2_sf[i] *
+                             (double) VecSrcReg3_sf[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_sf[i]));
+            }
+        '''
+
+    class gem5_mask_fnmsub132_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) -VecSrcReg2_df[i] -
+                             (__float128) VecSrcReg1_df[i] *
+                             (__float128) VecSrcReg3_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fnmsub213_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) -VecSrcReg3_df[i] -
+                             (__float128)  VecSrcReg2_df[i] *
+                             (__float128)  VecSrcReg1_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fnmsub231_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = (zmmOp()) ? 8 : ( (ymmOp()) ? 4 : 2 );
+            for(int i=0; i<count; i++) {
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                           ( (__float128) -VecSrcReg1_df[i] -
+                             (__float128)  VecSrcReg2_df[i] *
+                             (__float128)  VecSrcReg3_df[i] ) :
+                           ((zeroing) ? (0.0) : (VecSrcReg1_df[i]));
+            }
+        '''
+
+    class gem5_mask_fmaddsub132_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            double arg1, arg2, arg3;
+            for(int i=0; i<count; i++) {
+                arg1 = (double) VecSrcReg1_sf[i]; 
+                arg2 = (double) ((i%2) == (ext & mask(1)) ) ?
+                        -VecSrcReg2_sf[i] : VecSrcReg2_sf[i]; 
+                arg3 = (double) VecSrcReg3_sf[i]; 
+                VecDestReg_sf[i] =( bits(OpWriteMask, i) ) ?
+                            (arg1 * arg3 + arg2) :
+                            ((zeroing) ? (0.0) : (arg1));
+            }
+        '''
+
+    class gem5_mask_fmaddsub213_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            double arg1, arg2, arg3;
+            for(int i=0; i<count; i++) {
+                arg1 = (double) VecSrcReg1_sf[i]; 
+                arg2 = (double) VecSrcReg2_sf[i]; 
+                arg3 = (double) ((i%2) == (ext & mask(1)) ) ?
+                        -VecSrcReg3_sf[i] : VecSrcReg3_sf[i]; 
+                VecDestReg_sf[i] =( bits(OpWriteMask, i) ) ?
+                            (arg2 * arg1 + arg3) :
+                            ((zeroing) ? (0.0) : (arg1));
+            }
+        '''
+
+    class gem5_mask_fmaddsub231_ps(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_sf = { 0.0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            double arg1, arg2, arg3;
+            for(int i=0; i<count; i++) {
+                arg1 = (double) ((i%2) == (ext & mask(1)) ) ?
+                        -VecSrcReg1_sf[i] : VecSrcReg1_sf[i]; 
+                arg2 = (double) VecSrcReg2_sf[i]; 
+                arg3 = (double) VecSrcReg3_sf[i]; 
+                VecDestReg_sf[i] =( bits(OpWriteMask, i) ) ?
+                            (arg2 * arg3 + arg1) :
+                            ((zeroing) ? (0.0) : (arg1));
+            }
+        '''
+
+    class gem5_mask_fmaddsub132_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            __float128 arg1, arg2, arg3;
+            for(int i=0; i<count; i++) {
+                arg1 = (__float128) VecSrcReg1_df[i];
+                arg2 = (__float128) ((i%2) == (ext & mask(1)) ) ?
+                        -VecSrcReg2_df[i] : VecSrcReg2_df[i]; 
+                arg3 = (__float128) VecSrcReg3_df[i];
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                            (arg1 * arg3 + arg2) :
+                           ((zeroing) ? (0.0) : (arg1));
+            }
+        '''
+
+    class gem5_mask_fmaddsub213_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            __float128 arg1, arg2, arg3;
+            for(int i=0; i<count; i++) {
+                arg1 = (__float128) VecSrcReg1_df[i];
+                arg2 = (__float128) VecSrcReg2_df[i];
+                arg3 = (__float128) ((i%2) == (ext & mask(1)) ) ?
+                        -VecSrcReg3_df[i] : VecSrcReg3_df[i]; 
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                            (arg2 * arg1 + arg3) :
+                           ((zeroing) ? (0.0) : (arg1));
+            }
+        '''
+
+    class gem5_mask_fmaddsub231_pd(AVX512Op):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            VecDestReg_df = { 0.0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            __float128 arg1, arg2, arg3;
+            for(int i=0; i<count; i++) {
+                arg1 = (__float128) ((i%2) == (ext & mask(1)) ) ?
+                        -VecSrcReg1_df[i] : VecSrcReg1_df[i]; 
+                arg2 = (__float128) VecSrcReg2_df[i];
+                arg3 = (__float128) VecSrcReg3_df[i];
+                VecDestReg_df[i] = ( bits(OpWriteMask, i) ) ?
+                            (arg2 * arg3 + arg1) :
+                           ((zeroing) ? (0.0) : (arg1));
+            }
+        '''
+
+    class gem5_mask_conflict_epi32(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                uint32_t res = 0;
+                for(int j=0; j<i; j++) {
+                    if( VecSrcReg1_udw[i] == VecSrcReg1_udw[j] )
+                        res |= (1 << j);
+                }
+                VecDestReg_udw[i] = ( bits(OpWriteMask, i) ) ?
+                                    (res) : (zeroing ? 0 : VecSrcReg2_udw[i]);
+            }
+        '''
+
+    class gem5_mask_conflict_epi64(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                uint64_t res = 0;
+                for(int j=0; j<i; j++) {
+                    if( VecSrcReg1_uqw[i] == VecSrcReg1_uqw[j] )
+                        res |= (1 << j);
+                }
+                VecDestReg_uqw[i] = ( bits(OpWriteMask, i) ) ?
+                                    (res) : (zeroing ? 0 : VecSrcReg2_uqw[i]);
+            }
+        '''
+
+    class gem5_mask_set_epi64(AVX512Op):
+        op_class = 'No_OpClass'
+        code = '''
+            VecDestReg_uqw = VecSrcReg1_uqw;
+            uint8_t index = SrcReg3 & mask(3);
+            if( bits(OpWriteMask, index) )
+                VecDestReg_uqw[index] = SrcReg2;
+        '''
+
+    class gem5_mask_test_epi8(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 64 : (ymmOp() ? 32 : 16);
+            for(int i=0; i<count; i++) {
+                uint8_t arg1 = VecSrcReg1_ub[i];
+                uint8_t arg2 = VecSrcReg2_ub[i];
+                if( (arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_test_epi16(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 32 : (ymmOp() ? 16 : 8);
+            for(int i=0; i<count; i++) {
+                uint16_t arg1 = VecSrcReg1_uw[i];
+                uint16_t arg2 = VecSrcReg2_uw[i];
+                if( (arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_test_epi32(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                uint32_t arg1 = VecSrcReg1_udw[i];
+                uint32_t arg2 = VecSrcReg2_udw[i];
+                if( (arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_test_epi64(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                uint64_t arg1 = VecSrcReg1_uqw[i];
+                uint64_t arg2 = VecSrcReg2_uqw[i];
+                if( (arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_testn_epi8(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 64 : (ymmOp() ? 32 : 16);
+            for(int i=0; i<count; i++) {
+                uint8_t arg1 = VecSrcReg1_ub[i];
+                uint8_t arg2 = VecSrcReg2_ub[i];
+                if( !(arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_testn_epi16(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 32 : (ymmOp() ? 16 : 8);
+            for(int i=0; i<count; i++) {
+                uint16_t arg1 = VecSrcReg1_uw[i];
+                uint16_t arg2 = VecSrcReg2_uw[i];
+                if( !(arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_testn_epi32(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            for(int i=0; i<count; i++) {
+                uint32_t arg1 = VecSrcReg1_udw[i];
+                uint32_t arg2 = VecSrcReg2_udw[i];
+                if( !(arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_testn_epi64(AVX512Op):
+        op_class = 'SimdCmpOp'
+        code = '''
+            OpMaskDestReg = 0;
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            for(int i=0; i<count; i++) {
+                uint64_t arg1 = VecSrcReg1_uqw[i];
+                uint64_t arg2 = VecSrcReg2_uqw[i];
+                if( !(arg1 & arg2) && bits(OpWriteMask, i) )
+                    OpMaskDestReg |= mask(1) << i;
+                // zeroing mask only
+            }
+        '''
+
+    class gem5_mask_compress_epi32(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_udw = { 0 };
+            int count = zmmOp() ? 16 : (ymmOp() ? 8 : 4);
+            int index = 0;
+            for(int i=0; i<count; ++i) {
+                if( bits(OpWriteMask, i) )
+                    VecDestReg_udw[index++] = VecSrcReg1_udw[i];
+            }
+            if( !zeroing ) {
+                for(int i=index; i<count; ++i)
+                    VecDestReg_udw[i] = VecSrcReg2_udw[i];
+            }
+        '''
+
+    class gem5_mask_compress_epi64(AVX512Op):
+        op_class = 'SimdAluOp'
+        code = '''
+            VecDestReg_uqw = { 0 };
+            int count = zmmOp() ? 8 : (ymmOp() ? 4 : 2);
+            int index = 0;
+            for(int i=0; i<count; ++i) {
+                if( bits(OpWriteMask, i) )
+                    VecDestReg_uqw[i] = VecSrcReg1_uqw[i];
+            }
+            if( !zeroing ) {
+                for(int i=index; i<count; ++i)
+                    VecDestReg_uqw[i] = VecSrcReg2_uqw[i];
+            }
+        '''
+
+}};

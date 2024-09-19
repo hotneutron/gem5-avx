@@ -1,0 +1,112 @@
+// Copyright (c) 2008 The Regents of The University of Michigan
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met: redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer;
+// redistributions in binary form must reproduce the above copyright
+// notice, this list of conditions and the following disclaimer in the
+// documentation and/or other materials provided with the distribution;
+// neither the name of the copyright holders nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+////////////////////////////////////////////////////////////////////
+//
+// Decode the three byte opcodes with the 0f38 prefix.
+//
+'X86ISA::ThreeByte0F38Opcode': decode LEGACY_OP {
+    format WarnUnimpl {
+        1: decode OPCODE_OP {
+            0x00: Inst::PSHUFB(Vdq,Wdq);
+            0x01: Inst::PHADDW(Vdq,Wdq);
+            0x02: Inst::PHADDD(Vdq,Wdq);
+            0x03: Inst::PHADDSW(Vdq,Wdq);
+            0x04: Inst::PMADDUBSW(Vdq,Wdq);
+            0x05: Inst::PHSUBW(Vdq,Wdq);
+            0x06: Inst::PHSUBD(Vdq,Wdq);
+            0x07: Inst::PHSUBSW(Vdq,Wdq);
+            0x08: Inst::PSIGNB(Vdq,Wdq);
+            0x09: Inst::PSIGNW(Vdq,Wdq);
+            0x0A: Inst::PSIGND(Vdq,Wdq);
+            0x0B: Inst::PMULHRSW(Vdq,Wdq);
+            0x10: Inst::PBLENDVB(Vdb,Wpb);
+            0x14: Inst::BLENDVPS(Vps,Wps);
+            0x15: Inst::BLENDVPD(Vpd,Wpd);
+            0x17: Inst::PTEST(Vo,Wo);
+            0x1C: Inst::PABSB(Vdq,Wdq);
+            0x1D: Inst::PABSW(Vdq,Wdq);
+            0x1E: Inst::PABSD(Vdq,Wdq);
+            0x20: Inst::PMOVSXBW(Vpi,Wpk);
+            0x21: Inst::PMOVSXBD(Vpj,Wpk);
+            0x22: Inst::PMOVSXBQ(Vpq,Wpk);
+            0x23: Inst::PMOVSXWD(Vpj,Wpi);
+            0x24: Inst::PMOVSXWQ(Vpq,Wpi);
+            0x25: Inst::PMOVSXDQ(Vpq,Wpj);
+            0x28: Inst::PMULDQ(Vpq,Wpq);
+            0x29: Inst::PCMPEQQ(Vpq,Wpq);
+            0x2A: Inst::MOVNTDQA(Vo,Mo);
+            0x2B: Inst::PACKUSDW(Vpi,Wpj);
+            0x30: Inst::PMOVZXBW(Vpi,Wpk);
+            0x31: Inst::PMOVZXBD(Vpj,Wpk);
+            0x32: Inst::PMOVZXBQ(Vpq,Wpk);
+            0x33: Inst::PMOVZXWD(Vpj,Wpi);
+            0x34: Inst::PMOVZXWQ(Vpq,Wpi);
+            0x35: Inst::PMOVZXDQ(Vpq,Wpj);
+            0x37: Inst::PCMPGTQ(Vpq,Wpq);
+            0x38: Inst::PMINSB(Vpk,Wpk);
+            0x39: Inst::PMINSD(Vpj,Wpj);
+            0x3A: Inst::PMINUW(Vpi,Wpi);
+            0x3B: Inst::PMINUD(Vpj,Wpj);
+            0x3C: Inst::PMAXSB(Vpk,Wpk);
+            0x3D: Inst::PMAXSD(Vpj,Wpj);
+            0x3E: Inst::PMAXUW(Vpi,Wpi);
+            0x3F: Inst::PMAXUD(Vpj,Wpj);
+            0x40: Inst::PMULLD(Vpj,Wpj);
+            0x41: Inst::PHMINPOSUW(Vpi,Wpi);
+            0xF0: Inst::MOVBE(Gw,Mw);
+            0xF1: Inst::MOVBE(Mw,Gw);
+            default: Inst::UD2();
+        }
+        default: decode LEGACY_REPNE {
+            1: decode OPCODE_OP {
+                0xF0: crc32_Gd_Eb();
+                0xF1: crc32_Gd_Ev();
+                default: Inst::UD2();
+            }
+            default: decode OPCODE_OP {
+                0x00: pshufb_Pq_Qq();
+                0x01: phaddw_Pq_Qq();
+                0x02: phaddd_Pq_Qq();
+                0x03: phaddsw_Pq_Qq();
+                0x04: pmaddubsw_Pq_Qq();
+                0x05: phsubw_Pq_Qq();
+                0x06: phsubd_Pq_Qq();
+                0x07: phsubsw_Pq_Qq();
+                0x08: psignb_Pq_Qq();
+                0x09: psignw_Pq_Qq();
+                0x0A: psignd_Pq_Qq();
+                0x0B: pmulhrsw_Pq_Qq();
+                0x1C: pabsb_Pq_Qq();
+                0x1D: pabsw_Pq_Qq();
+                0x1E: pabsd_Pq_Qq();
+                0xF0: Inst::MOVBE(Gy,My);
+                0xF1: Inst::MOVBE(My,Gy);
+                default: Inst::UD2();
+            }
+        }
+    }
+}

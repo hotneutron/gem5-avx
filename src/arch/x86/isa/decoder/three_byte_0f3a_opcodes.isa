@@ -1,0 +1,83 @@
+// Copyright (c) 2008 The Regents of The University of Michigan
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met: redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer;
+// redistributions in binary form must reproduce the above copyright
+// notice, this list of conditions and the following disclaimer in the
+// documentation and/or other materials provided with the distribution;
+// neither the name of the copyright holders nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+////////////////////////////////////////////////////////////////////
+//
+// Decode the three byte opcodes with the 0f3a prefix.
+//
+format WarnUnimpl {
+    'X86ISA::ThreeByte0F3AOpcode': decode LEGACY_OP {
+        1: decode OPCODE_OP {
+            0x08: Inst::ROUNDPS(Vps,Wps,Ib);
+            0x09: Inst::ROUNDPD(Vpd,Wpd,Ib);
+            0x0A: Inst::ROUNDSS(Vss,Wss,Ib);
+            0x0B: Inst::ROUNDSD(Vsd,Wsd,Ib);
+            0x0C: Inst::BLENDPS(Vps,Wps,Ib);
+            0x0D: Inst::BLENDPD(Vpd,Wpd,Ib);
+            0x0E: Inst::PBLENDW(Vpw,Wpw,Ib);
+            0x0F: Inst::PALIGNR(Vdq,Wdq,Ib);
+            0x14: decode MODRM_MOD {
+                0x3:     Inst::PEXTRB(Ry,Vpk,Ib);
+                default: Inst::PEXTRB(Mb,Vpk,Ib);
+            }
+            0x15: decode MODRM_MOD {
+                0x3:     Inst::PEXTRW(Rd,Vpw,Ib);
+                default: Inst::PEXTRW(Mw,Vpw,Ib);
+            }
+            0x16: decode REX_W {
+                0x1:     Inst::PEXTRQ(Eq,Vpq,Ib);
+                default: Inst::PEXTRD(Ed,Vpj,Ib);
+            }
+            0x17: decode MODRM_MOD {
+                0x3:     Inst::EXTRACTPS(Ry,Vps,Ib);
+                default: Inst::EXTRACTPS(Md,Vps,Ib);
+            }
+            0x20: decode MODRM_MOD {
+                0x3:     Inst::PINSRB(Vpk,Rb,Ib);
+                default: Inst::PINSRB(Vpk,Mb,Ib);
+            }
+            0x21: decode MODRM_MOD {
+                0x3:     Inst::INSERTPS(Vps,Uo,Ib);
+                default: Inst::INSERTPS(Vps,Md,Ib);
+            }
+            0x22: decode REX_W {
+                0x1:     Inst::PINSRQ(Vpj,Ed,Ib);
+                default: Inst::PINSRD(Vpj,Ed,Ib);
+            }
+            0x40: Inst::DPPS(Vdq,Wdq,Ib);
+            0x41: Inst::DPPD(Vdq,Wdq,Ib);
+            0x60: Inst::PCMPESTRM(Vo,Wo,Ib);
+            0x61: Inst::PCMPESTRI(Vo,Wo,Ib);
+            0x62: Inst::PCMPISTRM(Vo,Wo,Ib);
+            0x63: Inst::PCMPISTRI(Vo,Wo,Ib);
+            default: Inst::UD2();
+        }
+        default: decode OPCODE_OP {
+            0x0F: palignr_Pq_Qq_Ib();
+            default: Inst::UD2();
+        }
+    }
+}

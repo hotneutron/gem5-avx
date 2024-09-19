@@ -1,0 +1,771 @@
+// Copyright (c) 2007-2008 The Hewlett-Packard Development Company
+// Copyright (c) 2015 Advanced Micro Devices, Inc.
+// All rights reserved.
+//
+// The license below extends only to copyright in the software and shall
+// not be construed as granting a license to any other intellectual
+// property including but not limited to intellectual property relating
+// to a hardware implementation of the functionality of the software
+// licensed hereunder.  You may use the software subject to the license
+// terms below provided that you ensure that this notice is replicated
+// unmodified and in its entirety in all distributions of the software,
+// modified or unmodified, in source code or in binary form.
+//
+// Copyright (c) 2007 The Regents of The University of Michigan
+// Copyright (c) 2012 Mark D. Hill and David A. Wood
+// Copyright (c) 2012-2013 Advanced Micro Devices, Inc.
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met: redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer;
+// redistributions in binary form must reproduce the above copyright
+// notice, this list of conditions and the following disclaimer in the
+// documentation and/or other materials provided with the distribution;
+// neither the name of the copyright holders nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+def operand_types {{
+    'sb' : 'int8_t',
+    'ub' : 'uint8_t',
+    'sw' : 'int16_t',
+    'uw' : 'uint16_t',
+    'sdw' : 'int32_t',
+    'udw' : 'uint32_t',
+    'sqw' : 'int64_t',
+    'uqw' : 'uint64_t',
+    'sf' : 'float',
+    'df' : 'double',
+
+# 64 bits vector type
+    'sb8'	: 'std::array<int8_t,	8>',
+    'ub8'	: 'std::array<uint8_t,	8>',
+    'sw4'	: 'std::array<int16_t,	 4>',
+    'uw4'	: 'std::array<uint16_t,	 4>',
+    'sdw2'	: 'std::array<int32_t,	 2>',
+    'udw2'	: 'std::array<uint32_t,	 2>',
+    'sqw1'	: 'std::array<int64_t,	 1>',
+    'uqw1'	: 'std::array<uint64_t,	 1>',
+    'sf1'	: 'std::array<float,	 2>',
+    'df1'	: 'std::array<double,	 1>',
+
+# 128 bits vector type
+    'sb16'	: 'std::array<int8_t,	16>',
+    'ub16'	: 'std::array<uint8_t,	16>',
+    'sw8'	: 'std::array<int16_t,	 8>',
+    'uw8'	: 'std::array<uint16_t,	 8>',
+    'sdw4'	: 'std::array<int32_t,	 4>',
+    'udw4'	: 'std::array<uint32_t,	 4>',
+    'sqw2'	: 'std::array<int64_t,	 2>',
+    'uqw2'	: 'std::array<uint64_t,	 2>',
+    'sf4'	: 'std::array<float,	 4>',
+    'df2'	: 'std::array<double,	 2>',
+
+# 256 bits vector type
+    'sb32'	: 'std::array<int8_t,   32>',
+    'ub32'	: 'std::array<uint8_t,  32>',
+    'sw16'	: 'std::array<int16_t,  16>',
+    'uw16'	: 'std::array<uint16_t,	16>',
+    'sdw8'	: 'std::array<int32_t,	 8>',
+    'udw8'	: 'std::array<uint32_t,	 8>',
+    'sqw4'	: 'std::array<int64_t,	 4>',
+    'uqw4'	: 'std::array<uint64_t,	 4>',
+    'sf8'	: 'std::array<float,	 8>',
+    'df4'	: 'std::array<double,	 4>',
+
+# 512 bits vector type
+    'sb64'	: 'std::array<int8_t,	64>',
+    'ub64'	: 'std::array<uint8_t,	64>',
+    'sw32'	: 'std::array<int16_t,	32>',
+    'uw32'	: 'std::array<uint16_t,	32>',
+    'sdw16'	: 'std::array<int32_t,	16>',
+    'udw16'	: 'std::array<uint32_t,	16>',
+    'sqw8'	: 'std::array<int64_t,	 8>',
+    'uqw8'	: 'std::array<uint64_t,	 8>',
+    'sf16'	: 'std::array<float,	16>',
+    'df8'	: 'std::array<double,	 8>',
+
+# MAX bits vector type
+    'maxsb'	: 'std::array<int8_t,	64>',
+    'maxub'	: 'std::array<uint8_t,	64>',
+    'maxsw'	: 'std::array<int16_t,	32>',
+    'maxuw'	: 'std::array<uint16_t,	32>',
+    'maxsdw': 'std::array<int32_t,	16>',
+    'maxudw': 'std::array<uint32_t,	16>',
+    'maxsqw': 'std::array<int64_t,	 8>',
+    'maxuqw': 'std::array<uint64_t,	 8>',
+    'maxsf'	: 'std::array<float,	16>',
+    'maxdf'	: 'std::array<double,	 8>',
+
+# vector container
+    'vc'    : 'TheISA::VecRegContainer',
+}};
+
+let {{
+    def foldInt(idx, foldBit, id):
+        return ('IntReg', 'uqw', 'INTREG_FOLDED(%s, %s)' % (idx, foldBit),
+                'IsInteger', id)
+    def intReg(idx, id):
+        return ('IntReg', 'uqw', idx, 'IsInteger', id)
+    def impIntReg(idx, id):
+        return ('IntReg', 'uqw', 'INTREG_IMPLICIT(%s)' % idx, 'IsInteger', id)
+    def floatReg(idx, id):
+        return ('FloatReg', 'df', idx, 'IsFloating', id)
+    def vectorRegElem(elem, ext = 'uqw', zeroing = False):
+        return (elem, ext, zeroing)
+    def vectorReg(idx, id, elems = None):
+        return ('VecReg', 'vc', (idx, elems), 'IsVector', id)
+    def vectorReg1(idx, id):
+        return ('VecReg', 'vc', idx, 'IsVector', id)
+    def opmaskReg(idx, id):
+        return ('OpMaskReg', 'uqw', idx, 'IsInteger', id)
+    def ccReg(idx, id):
+        return ('CCReg', 'uqw', idx, 'IsCC', id)
+    def controlReg(idx, id, ctype = 'uqw'):
+        return ('ControlReg', ctype, idx,
+                (None, None, ['IsSerializeAfter',
+                              'IsSerializing',
+                              'IsNonSpeculative']),
+                id)
+    def squashCheckReg(idx, id, check, ctype = 'uqw'):
+        return ('ControlReg', ctype, idx,
+                (None, None, ['((%s) ? ' % check+ \
+                                'IsSquashAfter : IsSerializeAfter)',
+                              'IsSerializing',
+                              'IsNonSpeculative']),
+                id)
+    def squashCReg(idx, id, ctype = 'uqw'):
+        return squashCheckReg(idx, id, 'true', ctype)
+    def squashCSReg(idx, id, ctype = 'uqw'):
+        return squashCheckReg(idx, id, 'dest == SEGMENT_REG_CS', ctype)
+    def squashCR0Reg(idx, id, ctype = 'uqw'):
+        return squashCheckReg(idx, id, 'dest == 0', ctype)
+}};
+
+def operands {{
+        'SrcReg1':       foldInt('src1', 'foldOBit', 1),
+        'SSrcReg1':      intReg('src1', 1),
+        'SrcReg2':       foldInt('src2', 'foldOBit', 2),
+        'SSrcReg2':      intReg('src2', 2),
+        'SrcReg3':       foldInt('src3', 'foldOBit', 30),
+        'SSrcReg3':      intReg('src3', 30),
+        'SrcReg4':       foldInt('src4', 'foldOBit', 31),
+        'SSrcReg4':      intReg('src4', 31),
+        'Index':         foldInt('index', 'foldABit', 3),
+        'Base':          foldInt('base', 'foldABit', 4),
+        'DestReg':       foldInt('dest', 'foldOBit', 5),
+        'SDestReg':      intReg('dest', 5),
+        'Data':          foldInt('data', 'foldOBit', 6),
+        'DataLow':       foldInt('dataLow', 'foldOBit', 6),
+        'DataHi':        foldInt('dataHi', 'foldOBit', 6),
+        'ProdLow':       impIntReg(0, 7),
+        'ProdHi':        impIntReg(1, 8),
+        'Quotient':      impIntReg(2, 9),
+        'Remainder':     impIntReg(3, 10),
+        'Divisor':       impIntReg(4, 11),
+        'DoubleBits':    impIntReg(5, 11),
+        'Rax':           intReg('(INTREG_RAX)', 12),
+        'Rbx':           intReg('(INTREG_RBX)', 13),
+        'Rcx':           intReg('(INTREG_RCX)', 14),
+        'Rdx':           intReg('(INTREG_RDX)', 15),
+        'Rsp':           intReg('(INTREG_RSP)', 16),
+        'Rbp':           intReg('(INTREG_RBP)', 17),
+        'Rsi':           intReg('(INTREG_RSI)', 18),
+        'Rdi':           intReg('(INTREG_RDI)', 19),
+        'R8':            intReg('(INTREG_R8)', 20),
+        'R9':            intReg('(INTREG_R9)', 21),
+        'FpSrcReg1':     floatReg('src1', 22),
+        'FpSrcReg2':     floatReg('src2', 23),
+        'FpSrcReg3':     floatReg('src3', 23),
+        'FpDestReg':     floatReg('dest', 24),
+        'FpData':        floatReg('data', 25),
+        'Xmm0':  		 vectorReg1('(VECTORREG_XMM0_BASE)', 26),
+        'Zmm2':  		 vectorReg1('(VECTORREG_ZMM2_BASE)', 220),
+        'OpMaskSrcReg1':     opmaskReg('src1', 214),
+        'OpMaskSrcReg2':     opmaskReg('src2', 215),
+        'OpMaskSrcReg3':     opmaskReg('src3', 216),
+        'OpMaskDestReg':     opmaskReg('dest', 217),
+        'OpMaskData':     opmaskReg('data', 218),
+        'OpWriteMask':     opmaskReg('opmask', 219),
+        'VecIndex'  :    vectorReg1('vindex', 33),
+        'VecSrcReg1':    vectorReg('src1', 27,
+        {
+			# 128 bits
+            'Iu64x2Src1'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x1Src1E0'		: vectorRegElem('0', 'uqw1'),
+            'Iu64x1Src1E1'		: vectorRegElem('1', 'uqw1'),
+            'Iu32x4Src1'		: vectorRegElem('0', 'udw4'),
+            'Iu32x2Src1E0'		: vectorRegElem('0', 'udw2'),
+            'Iu32x2Src1E1'		: vectorRegElem('1', 'udw2'),
+            'Iu16x8Src1'		: vectorRegElem('0', 'uw8'),
+            'Iu16x4Src1E0'		: vectorRegElem('0', 'uw4'),
+            'Iu16x4Src1E1'		: vectorRegElem('1', 'uw4'),
+            'Iu8x16Src1'		: vectorRegElem('0', 'ub16'),
+            'Iu8x8Src1E0'		: vectorRegElem('0', 'ub8'),
+            'Iu8x8Src1E1'		: vectorRegElem('1', 'ub8'),
+
+            'Is64x2Src1'		: vectorRegElem('0', 'sqw2'),
+            'Is64x1Src1E0'		: vectorRegElem('0', 'sqw1'),
+            'Is64x1Src1E1'		: vectorRegElem('1', 'sqw1'),
+            'Is32x4Src1'		: vectorRegElem('0', 'sdw4'),
+            'Is32x2Src1E0'		: vectorRegElem('0', 'sdw2'),
+            'Is32x2Src1E1'		: vectorRegElem('1', 'sdw2'),
+            'Is16x8Src1'		: vectorRegElem('0', 'sw8'),
+            'Is16x4Src1E0'		: vectorRegElem('0', 'sw4'),
+            'Is16x4Src1E1'		: vectorRegElem('1', 'sw4'),
+            'Is8x16Src1'		: vectorRegElem('0', 'sb16'),
+            'Is8x8Src1E0'		: vectorRegElem('0', 'sb8'),
+            'Is8x8Src1E1'		: vectorRegElem('1', 'sb8'),
+
+            'F64x2Src1'			: vectorRegElem('0', 'df2'),
+            'F64x1Src1E0'		: vectorRegElem('0', 'df1'),
+            'F64x1Src1E1'		: vectorRegElem('1', 'df1'),
+            'F32x4Src1'			: vectorRegElem('0', 'sf4'),
+            'F32x2Src1E0'		: vectorRegElem('0', 'sf2'),
+            'F32x2Src1E1'		: vectorRegElem('1', 'sf2'),
+
+			# 256 bits
+            'Iu64x4Src1'		: vectorRegElem('0', 'uqw4'),
+            'Iu64x2Src1E0'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x2Src1E1'		: vectorRegElem('1', 'uqw2'),
+            'Iu32x8Src1'		: vectorRegElem('0', 'udw8'),
+            'Iu32x4Src1E0'		: vectorRegElem('0', 'udw4'),
+            'Iu32x4Src1E1'		: vectorRegElem('1', 'udw4'),
+            'Iu16x16Src1'		: vectorRegElem('0', 'uw16'),
+            'Iu16x8Src1E0'		: vectorRegElem('0', 'uw8'),
+            'Iu16x8Src1E1'		: vectorRegElem('1', 'uw8'),
+            'Iu8x32Src1'		: vectorRegElem('0', 'ub32'),
+            'Iu8x16Src1E0'		: vectorRegElem('0', 'ub16'),
+            'Iu8x16Src1E1'		: vectorRegElem('1', 'ub16'),
+
+            'Is64x4Src1'		: vectorRegElem('0', 'sqw4'),
+            'Is64x2Src1E0'		: vectorRegElem('0', 'sqw2'),
+            'Is64x2Src1E1'		: vectorRegElem('1', 'sqw2'),
+            'Is32x8Src1'		: vectorRegElem('0', 'sdw8'),
+            'Is32x4Src1E0'		: vectorRegElem('0', 'sdw4'),
+            'Is32x4Src1E1'		: vectorRegElem('1', 'sdw4'),
+            'Is16x16Src1'		: vectorRegElem('0', 'sw16'),
+            'Is16x8Src1E0'		: vectorRegElem('0', 'sw8'),
+            'Is16x8Src1E1'		: vectorRegElem('1', 'sw8'),
+            'Is8x32Src1'		: vectorRegElem('0', 'sb32'),
+            'Is8x16Src1E0'		: vectorRegElem('0', 'sb16'),
+            'Is8x16Src1E1'		: vectorRegElem('1', 'sb16'),
+
+            'F64x4Src1'			: vectorRegElem('0', 'df4'),
+            'F64x2Src1E0'		: vectorRegElem('0', 'df2'),
+            'F64x2Src1E1'		: vectorRegElem('1', 'df2'),
+            'F32x8Src1'			: vectorRegElem('0', 'sf8'),
+            'F32x4Src1E0'		: vectorRegElem('0', 'sf4'),
+            'F32x4Src1E1'		: vectorRegElem('1', 'sf4'),
+
+			# 512 bits
+            'Iu64x8Src1'		: vectorRegElem('0', 'uqw8'),
+            'Iu32x16Src1'		: vectorRegElem('0', 'udw16'),
+            'Iu16x32Src1'		: vectorRegElem('0', 'uw32'),
+            'Iu8x64Src1'		: vectorRegElem('0', 'ub64'),
+
+            'Is64x8Src1'		: vectorRegElem('0', 'sqw8'),
+            'Is32x16Src1'		: vectorRegElem('0', 'sdw16'),
+            'Is16x32Src1'		: vectorRegElem('0', 'sw32'),
+            'Is8x64Src1'		: vectorRegElem('0', 'sb64'),
+
+            'F64x8Src1'			: vectorRegElem('0', 'df8'),
+            'F32x16Src1'		: vectorRegElem('0', 'sf16'),
+
+			# MAX bits
+            'Iu64xMaxSrc1'		: vectorRegElem('0', 'maxuqw'),
+            'Iu32xMaxSrc1'		: vectorRegElem('0', 'maxudw'),
+            'Iu16xMaxSrc1'		: vectorRegElem('0', 'maxuw'),
+            'Iu8xMaxSrc1'		: vectorRegElem('0', 'maxub'),
+
+            'Is64xMaxSrc1'		: vectorRegElem('0', 'maxsqw'),
+            'Is32xMaxSrc1'		: vectorRegElem('0', 'maxsdw'),
+            'Is16xMaxSrc1'		: vectorRegElem('0', 'maxsw'),
+            'Is8xMaxSrc1'		: vectorRegElem('0', 'maxsb'),
+
+            'F64xMaxSrc1'		: vectorRegElem('0', 'maxdf'),
+            'F32xMaxSrc1'		: vectorRegElem('0', 'maxsf')
+        }),
+        'VecSrcReg2':    vectorReg('src2', 28,
+        {
+            'Iu64x2Src2'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x1Src2E0'		: vectorRegElem('0', 'uqw1'),
+            'Iu64x1Src2E1'		: vectorRegElem('1', 'uqw1'),
+            'Iu32x4Src2'		: vectorRegElem('0', 'udw4'),
+            'Iu32x2Src2E0'		: vectorRegElem('0', 'udw2'),
+            'Iu32x2Src2E1'		: vectorRegElem('1', 'udw2'),
+            'Iu16x8Src2'		: vectorRegElem('0', 'uw8'),
+            'Iu16x4Src2E0'		: vectorRegElem('0', 'uw4'),
+            'Iu16x4Src2E1'		: vectorRegElem('1', 'uw4'),
+            'Iu8x16Src2'		: vectorRegElem('0', 'ub16'),
+            'Iu8x8Src2E0'		: vectorRegElem('0', 'ub8'),
+            'Iu8x8Src2E1'		: vectorRegElem('1', 'ub8'),
+
+            'Is64x2Src2'		: vectorRegElem('0', 'sqw2'),
+            'Is64x1Src2E0'		: vectorRegElem('0', 'sqw1'),
+            'Is64x1Src2E1'		: vectorRegElem('1', 'sqw1'),
+            'Is32x4Src2'		: vectorRegElem('0', 'sdw4'),
+            'Is32x2Src2E0'		: vectorRegElem('0', 'sdw2'),
+            'Is32x2Src2E1'		: vectorRegElem('1', 'sdw2'),
+            'Is16x8Src2'		: vectorRegElem('0', 'sw8'),
+            'Is16x4Src2E0'		: vectorRegElem('0', 'sw4'),
+            'Is16x4Src2E1'		: vectorRegElem('1', 'sw4'),
+            'Is8x16Src2'		: vectorRegElem('0', 'sb16'),
+            'Is8x8Src2E0'		: vectorRegElem('0', 'sb8'),
+            'Is8x8Src2E1'		: vectorRegElem('1', 'sb8'),
+
+            'F64x2Src2'			: vectorRegElem('0', 'df2'),
+            'F64x1Src2E0'		: vectorRegElem('0', 'df1'),
+            'F64x1Src2E1'		: vectorRegElem('1', 'df1'),
+            'F32x4Src2'			: vectorRegElem('0', 'sf4'),
+            'F32x2Src2E0'		: vectorRegElem('0', 'sf2'),
+            'F32x2Src2E1'		: vectorRegElem('1', 'sf2'),
+
+			# 256 bits
+            'Iu64x4Src2'		: vectorRegElem('0', 'uqw4'),
+            'Iu64x2Src2E0'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x2Src2E1'		: vectorRegElem('1', 'uqw2'),
+            'Iu32x8Src2'		: vectorRegElem('0', 'udw8'),
+            'Iu32x4Src2E0'		: vectorRegElem('0', 'udw4'),
+            'Iu32x4Src2E1'		: vectorRegElem('1', 'udw4'),
+            'Iu16x16Src2'		: vectorRegElem('0', 'uw16'),
+            'Iu16x8Src2E0'		: vectorRegElem('0', 'uw8'),
+            'Iu16x8Src2E1'		: vectorRegElem('1', 'uw8'),
+            'Iu8x32Src2'		: vectorRegElem('0', 'ub32'),
+            'Iu8x16Src2E0'		: vectorRegElem('0', 'ub16'),
+            'Iu8x16Src2E1'		: vectorRegElem('1', 'ub16'),
+
+            'Is64x4Src2'		: vectorRegElem('0', 'sqw4'),
+            'Is64x2Src2E0'		: vectorRegElem('0', 'sqw2'),
+            'Is64x2Src2E1'		: vectorRegElem('1', 'sqw2'),
+            'Is32x8Src2'		: vectorRegElem('0', 'sdw8'),
+            'Is32x4Src2E0'		: vectorRegElem('0', 'sdw4'),
+            'Is32x4Src2E1'		: vectorRegElem('1', 'sdw4'),
+            'Is16x16Src2'		: vectorRegElem('0', 'sw16'),
+            'Is16x8Src2E0'		: vectorRegElem('0', 'sw8'),
+            'Is16x8Src2E1'		: vectorRegElem('1', 'sw8'),
+            'Is8x32Src2'		: vectorRegElem('0', 'sb32'),
+            'Is8x16Src2E0'		: vectorRegElem('0', 'sb16'),
+            'Is8x16Src2E1'		: vectorRegElem('1', 'sb16'),
+
+            'F64x4Src2'			: vectorRegElem('0', 'df4'),
+            'F64x2Src2E0'		: vectorRegElem('0', 'df2'),
+            'F64x2Src2E1'		: vectorRegElem('1', 'df2'),
+            'F32x8Src2'			: vectorRegElem('0', 'sf8'),
+            'F32x4Src2E0'		: vectorRegElem('0', 'sf4'),
+            'F32x4Src2E1'		: vectorRegElem('1', 'sf4'),
+
+			# 512 bits
+            'Iu64x8Src2'		: vectorRegElem('0', 'uqw8'),
+            'Iu32x16Src2'		: vectorRegElem('0', 'udw16'),
+            'Iu16x32Src2'		: vectorRegElem('0', 'uw32'),
+            'Iu8x64Src2'		: vectorRegElem('0', 'ub64'),
+
+            'Is64x8Src2'		: vectorRegElem('0', 'sqw8'),
+            'Is32x16Src2'		: vectorRegElem('0', 'sdw16'),
+            'Is16x32Src2'		: vectorRegElem('0', 'sw32'),
+            'Is8x64Src2'		: vectorRegElem('0', 'sb64'),
+
+            'F64x8Src2'			: vectorRegElem('0', 'df8'),
+            'F32x16Src2'		: vectorRegElem('0', 'sf16'),
+
+			# MAX bits
+            'Iu64xMaxSrc2'		: vectorRegElem('0', 'maxuqw'),
+            'Iu32xMaxSrc2'		: vectorRegElem('0', 'maxudw'),
+            'Iu16xMaxSrc2'		: vectorRegElem('0', 'maxuw'),
+            'Iu8xMaxSrc2'		: vectorRegElem('0', 'maxub'),
+
+            'Is64xMaxSrc2'		: vectorRegElem('0', 'maxsqw'),
+            'Is32xMaxSrc2'		: vectorRegElem('0', 'maxsdw'),
+            'Is16xMaxSrc2'		: vectorRegElem('0', 'maxsw'),
+            'Is8xMaxSrc2'		: vectorRegElem('0', 'maxsb'),
+
+            'F64xMaxSrc2'		: vectorRegElem('0', 'maxdf'),
+            'F32xMaxSrc2'		: vectorRegElem('0', 'maxsf')
+        }),
+        'VecSrcReg3':    vectorReg('src3', 28,
+        {
+            'Iu64x2Src3'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x1Src3E0'		: vectorRegElem('0', 'uqw1'),
+            'Iu64x1Src3E1'		: vectorRegElem('1', 'uqw1'),
+            'Iu32x4Src3'		: vectorRegElem('0', 'udw4'),
+            'Iu32x2Src3E0'		: vectorRegElem('0', 'udw2'),
+            'Iu32x2Src3E1'		: vectorRegElem('1', 'udw2'),
+            'Iu16x8Src3'		: vectorRegElem('0', 'uw8'),
+            'Iu16x4Src3E0'		: vectorRegElem('0', 'uw4'),
+            'Iu16x4Src3E1'		: vectorRegElem('1', 'uw4'),
+            'Iu8x16Src3'		: vectorRegElem('0', 'ub16'),
+            'Iu8x8Src3E0'		: vectorRegElem('0', 'ub8'),
+            'Iu8x8Src3E1'		: vectorRegElem('1', 'ub8'),
+
+            'Is64x2Src3'		: vectorRegElem('0', 'sqw2'),
+            'Is64x1Src3E0'		: vectorRegElem('0', 'sqw1'),
+            'Is64x1Src3E1'		: vectorRegElem('1', 'sqw1'),
+            'Is32x4Src3'		: vectorRegElem('0', 'sdw4'),
+            'Is32x2Src3E0'		: vectorRegElem('0', 'sdw2'),
+            'Is32x2Src3E1'		: vectorRegElem('1', 'sdw2'),
+            'Is16x8Src3'		: vectorRegElem('0', 'sw8'),
+            'Is16x4Src3E0'		: vectorRegElem('0', 'sw4'),
+            'Is16x4Src3E1'		: vectorRegElem('1', 'sw4'),
+            'Is8x16Src3'		: vectorRegElem('0', 'sb16'),
+            'Is8x8Src3E0'		: vectorRegElem('0', 'sb8'),
+            'Is8x8Src3E1'		: vectorRegElem('1', 'sb8'),
+
+            'F64x2Src3'			: vectorRegElem('0', 'df2'),
+            'F64x1Src3E0'		: vectorRegElem('0', 'df1'),
+            'F64x1Src3E1'		: vectorRegElem('1', 'df1'),
+            'F32x4Src3'			: vectorRegElem('0', 'sf4'),
+            'F32x2Src3E0'		: vectorRegElem('0', 'sf2'),
+            'F32x2Src3E1'		: vectorRegElem('1', 'sf2'),
+
+			# 256 bits
+            'Iu64x4Src3'		: vectorRegElem('0', 'uqw4'),
+            'Iu64x2Src3E0'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x2Src3E1'		: vectorRegElem('1', 'uqw2'),
+            'Iu32x8Src3'		: vectorRegElem('0', 'udw8'),
+            'Iu32x4Src3E0'		: vectorRegElem('0', 'udw4'),
+            'Iu32x4Src3E1'		: vectorRegElem('1', 'udw4'),
+            'Iu16x16Src3'		: vectorRegElem('0', 'uw16'),
+            'Iu16x8Src3E0'		: vectorRegElem('0', 'uw8'),
+            'Iu16x8Src3E1'		: vectorRegElem('1', 'uw8'),
+            'Iu8x32Src3'		: vectorRegElem('0', 'ub32'),
+            'Iu8x16Src3E0'		: vectorRegElem('0', 'ub16'),
+            'Iu8x16Src3E1'		: vectorRegElem('1', 'ub16'),
+
+            'Is64x4Src3'		: vectorRegElem('0', 'sqw4'),
+            'Is64x2Src3E0'		: vectorRegElem('0', 'sqw2'),
+            'Is64x2Src3E1'		: vectorRegElem('1', 'sqw2'),
+            'Is32x8Src3'		: vectorRegElem('0', 'sdw8'),
+            'Is32x4Src3E0'		: vectorRegElem('0', 'sdw4'),
+            'Is32x4Src3E1'		: vectorRegElem('1', 'sdw4'),
+            'Is16x16Src3'		: vectorRegElem('0', 'sw16'),
+            'Is16x8Src3E0'		: vectorRegElem('0', 'sw8'),
+            'Is16x8Src3E1'		: vectorRegElem('1', 'sw8'),
+            'Is8x32Src3'		: vectorRegElem('0', 'sb32'),
+            'Is8x16Src3E0'		: vectorRegElem('0', 'sb16'),
+            'Is8x16Src3E1'		: vectorRegElem('1', 'sb16'),
+
+            'F64x4Src3'			: vectorRegElem('0', 'df4'),
+            'F64x2Src3E0'		: vectorRegElem('0', 'df2'),
+            'F64x2Src3E1'		: vectorRegElem('1', 'df2'),
+            'F32x8Src3'			: vectorRegElem('0', 'sf8'),
+            'F32x4Src3E0'		: vectorRegElem('0', 'sf4'),
+            'F32x4Src3E1'		: vectorRegElem('1', 'sf4'),
+
+			# 512 bits
+            'Iu64x8Src3'		: vectorRegElem('0', 'uqw8'),
+            'Iu32x16Src3'		: vectorRegElem('0', 'udw16'),
+            'Iu16x32Src3'		: vectorRegElem('0', 'uw32'),
+            'Iu8x64Src3'		: vectorRegElem('0', 'ub64'),
+
+            'Is64x8Src3'		: vectorRegElem('0', 'sqw8'),
+            'Is32x16Src3'		: vectorRegElem('0', 'sdw16'),
+            'Is16x32Src3'		: vectorRegElem('0', 'sw32'),
+            'Is8x64Src3'		: vectorRegElem('0', 'sb64'),
+
+            'F64x8Src3'			: vectorRegElem('0', 'df8'),
+            'F32x16Src3'		: vectorRegElem('0', 'sf16'),
+
+			# MAX bits
+            'Iu64xMaxSrc3'		: vectorRegElem('0', 'maxuqw'),
+            'Iu32xMaxSrc3'		: vectorRegElem('0', 'maxudw'),
+            'Iu16xMaxSrc3'		: vectorRegElem('0', 'maxuw'),
+            'Iu8xMaxSrc3'		: vectorRegElem('0', 'maxub'),
+
+            'Is64xMaxSrc3'		: vectorRegElem('0', 'maxsqw'),
+            'Is32xMaxSrc3'		: vectorRegElem('0', 'maxsdw'),
+            'Is16xMaxSrc3'		: vectorRegElem('0', 'maxsw'),
+            'Is8xMaxSrc3'		: vectorRegElem('0', 'maxsb'),
+
+            'F64xMaxSrc3'		: vectorRegElem('0', 'maxdf'),
+            'F32xMaxSrc3'		: vectorRegElem('0', 'maxsf')
+        }),
+        'VecDestReg':    vectorReg('dest', 29,
+        {
+            'Iu64x2Dest'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x1DestE0'		: vectorRegElem('0', 'uqw1'),
+            'Iu64x1DestE1'		: vectorRegElem('1', 'uqw1'),
+            'Iu32x4Dest'		: vectorRegElem('0', 'udw4'),
+            'Iu32x2DestE0'		: vectorRegElem('0', 'udw2'),
+            'Iu32x2DestE1'		: vectorRegElem('1', 'udw2'),
+            'Iu16x8Dest'		: vectorRegElem('0', 'uw8'),
+            'Iu16x4DestE0'		: vectorRegElem('0', 'uw4'),
+            'Iu16x4DestE1'		: vectorRegElem('1', 'uw4'),
+            'Iu8x16Dest'		: vectorRegElem('0', 'ub16'),
+            'Iu8x8DestE0'		: vectorRegElem('0', 'ub8'),
+            'Iu8x8DestE1'		: vectorRegElem('1', 'ub8'),
+
+            'Is64x2Dest'		: vectorRegElem('0', 'sqw2'),
+            'Is64x1DestE0'		: vectorRegElem('0', 'sqw1'),
+            'Is64x1DestE1'		: vectorRegElem('1', 'sqw1'),
+            'Is32x4Dest'		: vectorRegElem('0', 'sdw4'),
+            'Is32x2DestE0'		: vectorRegElem('0', 'sdw2'),
+            'Is32x2DestE1'		: vectorRegElem('1', 'sdw2'),
+            'Is16x8Dest'		: vectorRegElem('0', 'sw8'),
+            'Is16x4DestE0'		: vectorRegElem('0', 'sw4'),
+            'Is16x4DestE1'		: vectorRegElem('1', 'sw4'),
+            'Is8x16Dest'		: vectorRegElem('0', 'sb16'),
+            'Is8x8DestE0'		: vectorRegElem('0', 'sb8'),
+            'Is8x8DestE1'		: vectorRegElem('1', 'sb8'),
+
+            'F64x2Dest'			: vectorRegElem('0', 'df2'),
+            'F64x1DestE0'		: vectorRegElem('0', 'df1'),
+            'F64x1DestE1'		: vectorRegElem('1', 'df1'),
+            'F32x4Dest'			: vectorRegElem('0', 'sf4'),
+            'F32x2DestE0'		: vectorRegElem('0', 'sf2'),
+            'F32x2DestE1'		: vectorRegElem('1', 'sf2'),
+
+			# 256 bits
+            'Iu64x4Dest'		: vectorRegElem('0', 'uqw4'),
+            'Iu64x2DestE0'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x2DestE1'		: vectorRegElem('1', 'uqw2'),
+            'Iu32x8Dest'		: vectorRegElem('0', 'udw8'),
+            'Iu32x4DestE0'		: vectorRegElem('0', 'udw4'),
+            'Iu32x4DestE1'		: vectorRegElem('1', 'udw4'),
+            'Iu16x16Dest'		: vectorRegElem('0', 'uw16'),
+            'Iu16x8DestE0'		: vectorRegElem('0', 'uw8'),
+            'Iu16x8DestE1'		: vectorRegElem('1', 'uw8'),
+            'Iu8x32Dest'		: vectorRegElem('0', 'ub32'),
+            'Iu8x16DestE0'		: vectorRegElem('0', 'ub16'),
+            'Iu8x16DestE1'		: vectorRegElem('1', 'ub16'),
+
+            'Is64x4Dest'		: vectorRegElem('0', 'sqw4'),
+            'Is64x2DestE0'		: vectorRegElem('0', 'sqw2'),
+            'Is64x2DestE1'		: vectorRegElem('1', 'sqw2'),
+            'Is32x8Dest'		: vectorRegElem('0', 'sdw8'),
+            'Is32x4DestE0'		: vectorRegElem('0', 'sdw4'),
+            'Is32x4DestE1'		: vectorRegElem('1', 'sdw4'),
+            'Is16x16Dest'		: vectorRegElem('0', 'sw16'),
+            'Is16x8DestE0'		: vectorRegElem('0', 'sw8'),
+            'Is16x8DestE1'		: vectorRegElem('1', 'sw8'),
+            'Is8x32Dest'		: vectorRegElem('0', 'sb32'),
+            'Is8x16DestE0'		: vectorRegElem('0', 'sb16'),
+            'Is8x16DestE1'		: vectorRegElem('1', 'sb16'),
+
+            'F64x4Dest'			: vectorRegElem('0', 'df4'),
+            'F64x2DestE0'		: vectorRegElem('0', 'df2'),
+            'F64x2DestE1'		: vectorRegElem('1', 'df2'),
+            'F32x8Dest'			: vectorRegElem('0', 'sf8'),
+            'F32x4DestE0'		: vectorRegElem('0', 'sf4'),
+            'F32x4DestE1'		: vectorRegElem('1', 'sf4'),
+
+			# 512 bits
+            'Iu64x8Dest'		: vectorRegElem('0', 'uqw8'),
+            'Iu32x16Dest'		: vectorRegElem('0', 'udw16'),
+            'Iu16x32Dest'		: vectorRegElem('0', 'uw32'),
+            'Iu8x64Dest'		: vectorRegElem('0', 'ub64'),
+
+            'Is64x8Dest'		: vectorRegElem('0', 'sqw8'),
+            'Is32x16Dest'		: vectorRegElem('0', 'sdw16'),
+            'Is16x32Dest'		: vectorRegElem('0', 'sw32'),
+            'Is8x64Dest'		: vectorRegElem('0', 'sb64'),
+
+            'F64x8Dest'			: vectorRegElem('0', 'df8'),
+            'F32x16Dest'		: vectorRegElem('0', 'sf16'),
+
+			# MAX bits
+            'Iu64xMaxDest'		: vectorRegElem('0', 'maxuqw'),
+            'Iu32xMaxDest'		: vectorRegElem('0', 'maxudw'),
+            'Iu16xMaxDest'		: vectorRegElem('0', 'maxuw'),
+            'Iu8xMaxDest'		: vectorRegElem('0', 'maxub'),
+
+            'Is64xMaxDest'		: vectorRegElem('0', 'maxsqw'),
+            'Is32xMaxDest'		: vectorRegElem('0', 'maxsdw'),
+            'Is16xMaxDest'		: vectorRegElem('0', 'maxsw'),
+            'Is8xMaxDest'		: vectorRegElem('0', 'maxsb'),
+
+            'F64xMaxDest'		: vectorRegElem('0', 'maxdf'),
+            'F32xMaxDest'		: vectorRegElem('0', 'maxsf')
+        }),
+        'VecData':       vectorReg('data', 30,
+        {
+            'Iu64x2Data'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x1DataE0'		: vectorRegElem('0', 'uqw1'),
+            'Iu64x1DataE1'		: vectorRegElem('1', 'uqw1'),
+            'Iu32x4Data'		: vectorRegElem('0', 'udw4'),
+            'Iu32x2DataE0'		: vectorRegElem('0', 'udw2'),
+            'Iu32x2DataE1'		: vectorRegElem('1', 'udw2'),
+            'Iu16x8Data'		: vectorRegElem('0', 'uw8'),
+            'Iu16x4DataE0'		: vectorRegElem('0', 'uw4'),
+            'Iu16x4DataE1'		: vectorRegElem('1', 'uw4'),
+            'Iu8x16Data'		: vectorRegElem('0', 'ub16'),
+            'Iu8x8DataE0'		: vectorRegElem('0', 'ub8'),
+            'Iu8x8DataE1'		: vectorRegElem('1', 'ub8'),
+
+            'Is64x2Data'		: vectorRegElem('0', 'sqw2'),
+            'Is64x1DataE0'		: vectorRegElem('0', 'sqw1'),
+            'Is64x1DataE1'		: vectorRegElem('1', 'sqw1'),
+            'Is32x4Data'		: vectorRegElem('0', 'sdw4'),
+            'Is32x2DataE0'		: vectorRegElem('0', 'sdw2'),
+            'Is32x2DataE1'		: vectorRegElem('1', 'sdw2'),
+            'Is16x8Data'		: vectorRegElem('0', 'sw8'),
+            'Is16x4DataE0'		: vectorRegElem('0', 'sw4'),
+            'Is16x4DataE1'		: vectorRegElem('1', 'sw4'),
+            'Is8x16Data'		: vectorRegElem('0', 'sb16'),
+            'Is8x8DataE0'		: vectorRegElem('0', 'sb8'),
+            'Is8x8DataE1'		: vectorRegElem('1', 'sb8'),
+
+            'F64x2Data'			: vectorRegElem('0', 'df2'),
+            'F64x1DataE0'		: vectorRegElem('0', 'df1'),
+            'F64x1DataE1'		: vectorRegElem('1', 'df1'),
+            'F32x4Data'			: vectorRegElem('0', 'sf4'),
+            'F32x2DataE0'		: vectorRegElem('0', 'sf2'),
+            'F32x2DataE1'		: vectorRegElem('1', 'sf2'),
+
+			# 256 bits
+            'Iu64x4Data'		: vectorRegElem('0', 'uqw4'),
+            'Iu64x2DataE0'		: vectorRegElem('0', 'uqw2'),
+            'Iu64x2DataE1'		: vectorRegElem('1', 'uqw2'),
+            'Iu32x8Data'		: vectorRegElem('0', 'udw8'),
+            'Iu32x4DataE0'		: vectorRegElem('0', 'udw4'),
+            'Iu32x4DataE1'		: vectorRegElem('1', 'udw4'),
+            'Iu16x16Data'		: vectorRegElem('0', 'uw16'),
+            'Iu16x8DataE0'		: vectorRegElem('0', 'uw8'),
+            'Iu16x8DataE1'		: vectorRegElem('1', 'uw8'),
+            'Iu8x32Data'		: vectorRegElem('0', 'ub32'),
+            'Iu8x16DataE0'		: vectorRegElem('0', 'ub16'),
+            'Iu8x16DataE1'		: vectorRegElem('1', 'ub16'),
+
+            'Is64x4Data'		: vectorRegElem('0', 'sqw4'),
+            'Is64x2DataE0'		: vectorRegElem('0', 'sqw2'),
+            'Is64x2DataE1'		: vectorRegElem('1', 'sqw2'),
+            'Is32x8Data'		: vectorRegElem('0', 'sdw8'),
+            'Is32x4DataE0'		: vectorRegElem('0', 'sdw4'),
+            'Is32x4DataE1'		: vectorRegElem('1', 'sdw4'),
+            'Is16x16Data'		: vectorRegElem('0', 'sw16'),
+            'Is16x8DataE0'		: vectorRegElem('0', 'sw8'),
+            'Is16x8DataE1'		: vectorRegElem('1', 'sw8'),
+            'Is8x32Data'		: vectorRegElem('0', 'sb32'),
+            'Is8x16DataE0'		: vectorRegElem('0', 'sb16'),
+            'Is8x16DataE1'		: vectorRegElem('1', 'sb16'),
+
+            'F64x4Data'			: vectorRegElem('0', 'df4'),
+            'F64x2DataE0'		: vectorRegElem('0', 'df2'),
+            'F64x2DataE1'		: vectorRegElem('1', 'df2'),
+            'F32x8Data'			: vectorRegElem('0', 'sf8'),
+            'F32x4DataE0'		: vectorRegElem('0', 'sf4'),
+            'F32x4DataE1'		: vectorRegElem('1', 'sf4'),
+
+			# 512 bits
+            'Iu64x8Data'		: vectorRegElem('0', 'uqw8'),
+            'Iu32x16Data'		: vectorRegElem('0', 'udw16'),
+            'Iu16x32Data'		: vectorRegElem('0', 'uw32'),
+            'Iu8x64Data'		: vectorRegElem('0', 'ub64'),
+
+            'Is64x8Data'		: vectorRegElem('0', 'sqw8'),
+            'Is32x16Data'		: vectorRegElem('0', 'sdw16'),
+            'Is16x32Data'		: vectorRegElem('0', 'sw32'),
+            'Is8x64Data'		: vectorRegElem('0', 'sb64'),
+
+            'F64x8Data'			: vectorRegElem('0', 'df8'),
+            'F32x16Data'		: vectorRegElem('0', 'sf16'),
+
+			# MAX bits
+            'Iu64xMaxData'		: vectorRegElem('0', 'maxuqw'),
+            'Iu32xMaxData'		: vectorRegElem('0', 'maxudw')
+        }),
+         'RIP':           ('PCState', 'uqw', 'pc',
+                          (None, None, 'IsControl'), 50),
+        'NRIP':          ('PCState', 'uqw', 'npc',
+                          (None, None, 'IsControl'), 50),
+        'nuIP':          ('PCState', 'uqw', 'nupc',
+                          (None, None, 'IsControl'), 50),
+        # These registers hold the condition code portion of the flag
+        # register. The nccFlagBits version holds the rest.
+        'ccFlagBits':    ccReg('(CCREG_ZAPS)', 60),
+        'cfofBits':      ccReg('(CCREG_CFOF)', 61),
+        'dfBit':         ccReg('(CCREG_DF)', 62),
+        'ecfBit':        ccReg('(CCREG_ECF)', 63),
+        'ezfBit':        ccReg('(CCREG_EZF)', 64),
+
+        # These Pred registers are to be used where reading the portions of
+        # condition code registers is possibly optional, depending on how the
+        # check evaluates. There are two checks being specified, one tests if
+        # a register needs to be read, the other tests whether the register
+        # needs to be written to. It is unlikely that these would need to be
+        # used in the actual operation of the instruction. It is expected
+        # that these are used only in the flag code.
+
+        # Rationale behind the checks: at times, we need to partially update
+        # the condition code bits in a register. So we read the register even
+        # in the case when the all the bits will be written, or none of the
+        # bits will be written. The read predicate checks if any of the bits
+        # would be retained, the write predicate checks if any of the bits
+        # are being written.
+
+        'PredccFlagBits': ('CCReg', 'uqw', '(CCREG_ZAPS)', 'IsCC',
+                60, None, None, '''(((ext & (PFBit | AFBit | ZFBit | SFBit
+                )) != (PFBit | AFBit | ZFBit | SFBit )) &&
+                ((ext & (PFBit | AFBit | ZFBit | SFBit )) != 0))''',
+                '((ext & (PFBit | AFBit | ZFBit | SFBit )) != 0)'),
+        'PredcfofBits':   ('CCReg', 'uqw', '(CCREG_CFOF)', 'IsCC',
+                61, None, None, '''(((ext & CFBit) == 0 ||
+                (ext & OFBit) == 0) && ((ext & (CFBit | OFBit)) != 0))''',
+                '((ext & (CFBit | OFBit)) != 0)'),
+        'PreddfBit':   ('CCReg', 'uqw', '(CCREG_DF)', 'IsCC',
+                62, None, None, '(false)', '((ext & DFBit) != 0)'),
+        'PredecfBit':   ('CCReg', 'uqw', '(CCREG_ECF)', 'IsCC',
+                63, None, None, '(false)', '((ext & ECFBit) != 0)'),
+        'PredezfBit':   ('CCReg', 'uqw', '(CCREG_EZF)', 'IsCC',
+                64, None, None, '(false)', '((ext & EZFBit) != 0)'),
+
+        # These register should needs to be more protected so that later
+        # instructions don't map their indexes with an old value.
+        'nccFlagBits':   controlReg('MISCREG_RFLAGS', 65),
+
+        # Registers related to the state of x87 floating point unit.
+        'TOP':           controlReg('MISCREG_X87_TOP', 66, ctype='ub'),
+        'FSW':           controlReg('MISCREG_FSW', 67, ctype='uw'),
+        'FTW':           controlReg('MISCREG_FTW', 68, ctype='uw'),
+        'FCW':           controlReg('MISCREG_FCW', 69, ctype='uw'),
+
+        # The segment base as used by memory instructions.
+        'SegBase':       controlReg('MISCREG_SEG_EFF_BASE(segment)', 70),
+
+        # Operands to get and set registers indexed by the operands of the
+        # original instruction.
+        'ControlDest':   squashCR0Reg('MISCREG_CR(dest)', 100),
+        'ControlSrc1':   controlReg('MISCREG_CR(src1)', 101),
+        'DebugDest':     controlReg('MISCREG_DR(dest)', 102),
+        'DebugSrc1':     controlReg('MISCREG_DR(src1)', 103),
+        'SegBaseDest':   squashCSReg('MISCREG_SEG_BASE(dest)', 104),
+        'SegBaseSrc1':   controlReg('MISCREG_SEG_BASE(src1)', 105),
+        'SegLimitDest':  squashCSReg('MISCREG_SEG_LIMIT(dest)', 106),
+        'SegLimitSrc1':  controlReg('MISCREG_SEG_LIMIT(src1)', 107),
+        'SegSelDest':    controlReg('MISCREG_SEG_SEL(dest)', 108),
+        'SegSelSrc1':    controlReg('MISCREG_SEG_SEL(src1)', 109),
+        'SegAttrDest':   squashCSReg('MISCREG_SEG_ATTR(dest)', 110),
+        'SegAttrSrc1':   controlReg('MISCREG_SEG_ATTR(src1)', 111),
+
+        # Operands to access specific control registers directly.
+        'EferOp':        squashCReg('MISCREG_EFER', 200),
+        'CR4Op':         controlReg('MISCREG_CR4', 201),
+        'DR7Op':         controlReg('MISCREG_DR7', 202),
+        'LDTRBase':      controlReg('MISCREG_TSL_BASE', 203),
+        'LDTRLimit':     controlReg('MISCREG_TSL_LIMIT', 204),
+        'LDTRSel':       controlReg('MISCREG_TSL', 205),
+        'GDTRBase':      controlReg('MISCREG_TSG_BASE', 206),
+        'GDTRLimit':     controlReg('MISCREG_TSG_LIMIT', 207),
+        'CSBase':        squashCReg('MISCREG_CS_EFF_BASE', 208),
+        'CSAttr':        squashCReg('MISCREG_CS_ATTR', 209),
+        'MiscRegDest':   controlReg('dest', 210),
+        'MiscRegSrc1':   controlReg('src1', 211),
+        'TscOp':         controlReg('MISCREG_TSC', 212),
+        'M5Reg':         squashCReg('MISCREG_M5_REG', 213),
+        'Mem':           ('Mem', 'uqw', None, \
+                          ('IsMemRef', 'IsLoad', 'IsStore'), 300)
+}};

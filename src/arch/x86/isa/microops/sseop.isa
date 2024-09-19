@@ -1,0 +1,3693 @@
+// Copyright (c) 2009 The Regents of The University of Michigan
+// Copyright (c) 2015 Advanced Micro Devices, Inc.
+//
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met: redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer;
+// redistributions in binary form must reproduce the above copyright
+// notice, this list of conditions and the following disclaimer in the
+// documentation and/or other materials provided with the distribution;
+// neither the name of the copyright holders nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+def template SSEOpExecute {{
+        Fault %(class_name)s::execute(ExecContext *xc,
+                Trace::InstRecord *traceData) const
+        {
+            Fault fault = NoFault;
+
+            %(op_decl)s;
+            %(op_rd)s;
+
+            %(code)s;
+
+            //Write the resulting state to the execution context
+            if(fault == NoFault)
+            {
+                %(op_wb)s;
+            }
+            return fault;
+        }
+}};
+
+def template SSEOpRegDeclare {{
+    class %(class_name)s : public %(base_class)s
+    {
+      public:
+        %(class_name)s(ExtMachInst _machInst,
+                const char * instMnem, uint64_t setFlags,
+                InstRegIndex _src1, InstRegIndex _src2, InstRegIndex _dest,
+                uint8_t _srcSize, uint8_t _destSize, uint16_t _ext);
+
+        Fault execute(ExecContext *, Trace::InstRecord *) const override;
+    };
+}};
+
+def template SSEOpImmDeclare {{
+
+    class %(class_name)s : public %(base_class)s
+    {
+      public:
+        %(class_name)s(ExtMachInst _machInst,
+                const char * instMnem, uint64_t setFlags,
+                InstRegIndex _src1, uint16_t _imm8, InstRegIndex _dest,
+                uint8_t _srcSize, uint8_t _destSize, uint16_t _ext);
+
+        Fault execute(ExecContext *, Trace::InstRecord *) const override;
+    };
+}};
+
+def template SSEOpRegConstructor {{
+    %(class_name)s::%(class_name)s(
+            ExtMachInst machInst, const char * instMnem, uint64_t setFlags,
+            InstRegIndex _src1, InstRegIndex _src2, InstRegIndex _dest,
+            uint8_t _srcSize, uint8_t _destSize, uint16_t _ext) :
+        %(base_class)s(machInst, "%(mnemonic)s", instMnem, setFlags,
+                _src1, _src2, _dest, _srcSize, _destSize, _ext,
+                %(op_class)s)
+    {
+        %(constructor)s;
+    }
+}};
+
+def template SSEOpImmConstructor {{
+    %(class_name)s::%(class_name)s(
+            ExtMachInst machInst, const char * instMnem, uint64_t setFlags,
+            InstRegIndex _src1, uint16_t _imm8, InstRegIndex _dest,
+            uint8_t _srcSize, uint8_t _destSize, uint16_t _ext) :
+        %(base_class)s(machInst, "%(mnemonic)s", instMnem, setFlags,
+                _src1, _imm8, _dest, _srcSize, _destSize, _ext,
+                %(op_class)s)
+    {
+        %(constructor)s;
+    }
+}};
+
+let {{
+    # Make these empty strings so that concatenating onto
+    # them will always work.
+    header_output = ""
+    decoder_output = ""
+    exec_output = ""
+
+    immTemplates = (
+            SSEOpImmDeclare,
+            SSEOpImmConstructor,
+            SSEOpExecute)
+
+    regTemplates = (
+            SSEOpRegDeclare,
+            SSEOpRegConstructor,
+            SSEOpExecute)
+
+    class SSEOpMeta(type):
+        def buildCppClasses(self, name, Name, suffix, code):
+
+            # Globals to stick the output in
+            global header_output
+            global decoder_output
+            global exec_output
+
+            # If op2 is used anywhere, make register and immediate versions
+            # of this code.
+            matcher = re.compile(r"(?<!\w)(?P<prefix>s?)op2(?P<typeQual>_[^\W_]+)?")
+            match = matcher.search(code)
+            if match:
+                typeQual = ""
+                if match.group("typeQual"):
+                    typeQual = match.group("typeQual")
+                src2_name = "%sFpSrcReg2%s" % (match.group("prefix"), typeQual)
+                self.buildCppClasses(name, Name, suffix,
+                        matcher.sub(src2_name, code))
+                self.buildCppClasses(name + "i", Name, suffix + "Imm",
+                        matcher.sub("imm8", code))
+                return
+
+            base = "X86ISA::SSEOp"
+
+            # If imm8 shows up in the code, use the immediate templates, if
+            # not, hopefully the register ones will be correct.
+            matcher = re.compile("(?<!\w)imm8(?!\w)")
+            if matcher.search(code):
+                base += "Imm"
+                templates = immTemplates
+            else:
+                base += "Reg"
+                templates = regTemplates
+
+            # Get everything ready for the substitution
+            opt_args = []
+            if self.op_class:
+                opt_args.append(self.op_class)
+            iop = InstObjParams(name, Name + suffix, base, {"code" : code},
+                                opt_args)
+
+            # Generate the actual code (finally!)
+            header_output += templates[0].subst(iop)
+            decoder_output += templates[1].subst(iop)
+            exec_output += templates[2].subst(iop)
+
+
+        def __new__(mcls, Name, bases, dict):
+            abstract = False
+            name = Name.lower()
+            if "abstract" in dict:
+                abstract = dict['abstract']
+                del dict['abstract']
+            if not "op_class" in dict:
+                dict["op_class"] = None
+
+            cls = super(SSEOpMeta, mcls).__new__(mcls, Name, bases, dict)
+            if not abstract:
+                cls.className = Name
+                cls.base_mnemonic = name
+                code = cls.code
+
+                # Set up the C++ classes
+                mcls.buildCppClasses(cls, name, Name, "", code)
+
+                # Hook into the microassembler dict
+                global microopClasses
+                microopClasses[name] = cls
+
+                # If op2 is used anywhere, make register and immediate versions
+                # of this code.
+                matcher = re.compile(r"op2(?P<typeQual>_[^\W_]+)?")
+                if matcher.search(code):
+                    microopClasses[name + 'i'] = cls
+            return cls
+
+
+    @six.add_metaclass(SSEOpMeta)
+    class SSEOp(X86Microop):
+        # This class itself doesn't act as a microop
+        abstract = True
+
+        def __init__(self, dest, src1, op2,
+                size = None, destSize = None, srcSize = None, ext = None):
+            self.dest = dest
+            self.src1 = src1
+            self.op2 = op2
+            if size is not None:
+                self.srcSize = size
+                self.destSize = size
+            if srcSize is not None:
+                self.srcSize = srcSize
+            if destSize is not None:
+                self.destSize = destSize
+            if self.srcSize is None:
+                raise Exception("Source size not set.")
+            if self.destSize is None:
+                raise Exception("Dest size not set.")
+            if ext is None:
+                self.ext = 0
+            else:
+                self.ext = ext
+
+        def getAllocator(self, microFlags):
+            className = self.className
+            if self.mnemonic == self.base_mnemonic + 'i':
+                className += "Imm"
+            allocator = '''new %(class_name)s(machInst, macrocodeBlock,
+                    %(flags)s, %(src1)s, %(op2)s, %(dest)s,
+                    %(srcSize)s, %(destSize)s, %(ext)s)''' % {
+                "class_name" : className,
+                "flags" : self.microFlagsText(microFlags),
+                "src1" : self.src1, "op2" : self.op2,
+                "dest" : self.dest,
+                "srcSize" : self.srcSize,
+                "destSize" : self.destSize,
+                "ext" : self.ext}
+            return allocator
+
+    class sse_mov2int(SSEOp):
+        def __init__(self, dest, src1, src2 = 0, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_mov2int, self).__init__(dest, src1,\
+                    src2, size, destSize, srcSize, ext)
+        op_class = 'SimdMiscOp'
+        code = '''
+            int items = sizeof(double) / srcSize;
+            int offset = imm8;
+            if (bits(src1, 0) && (ext & 0x1))
+                offset -= items;
+            if (offset >= 0 && offset < items) {
+                uint64_t fpSrcReg1 =
+                    bits(Iu64x2Src1_uqw2[0],
+                            (offset + 1) * srcSize * 8 - 1,
+                            (offset + 0) * srcSize * 8);
+                DestReg = merge(0, fpSrcReg1, destSize);
+            } else {
+                DestReg = DestReg;
+            }
+        '''
+
+    class sse_mov2vec(SSEOp):
+        def __init__(self, dest, src1, src2 = 0, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_mov2vec, self).__init__(dest, src1,\
+                    src2, size, destSize, srcSize, ext)
+        op_class = 'SimdMiscOp'
+        code = '''
+            int items = sizeof(double) / destSize;
+            int offset = imm8;
+            if (bits(dest, 0) && (ext & 0x1))
+                offset -= items;
+            if (offset >= 0 && offset < items) {
+                uint64_t srcReg1 = pick(SrcReg1, 0, srcSize);
+                Iu64x2Dest_uqw2[0] =
+                    insertBits(Iu64x2Dest_uqw2[0],
+                            (offset + 1) * destSize * 8 - 1,
+                            (offset + 0) * destSize * 8, srcReg1);
+            } else {
+                Iu64x2Dest_uqw2[0] = Iu64x2Dest_uqw2[0];
+            }
+            Iu64x2Dest_uqw2[1] = 0;
+        '''
+
+    class sse_movsign(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_movsign, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdMiscOp'
+        code = '''
+            int items = sizeof(double) / srcSize;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            DestReg = 0;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = 0;
+                int offset = (idx == 1) ? items : 0;
+                for (int i = 0; i < items; i++) {
+                    uint64_t picked =
+                        bits(Iu64x2Src1_uqw2[idx], (i + 1) * 8 * srcSize - 1);
+                    result = insertBits(result, i + offset, i + offset, picked);
+                }
+                DestReg = DestReg | result;
+            }
+        '''
+
+    class sse_maskmov(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits = bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    if (bits(Iu64x2Src2_uqw2[idx], hiIndex))
+                        result = insertBits(result, hiIndex, loIndex, arg1Bits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class gem5_mm_unpacklo_ps(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i = 0; i < 2; i++) {
+                F32x4Dest_sf4[i*2  ] = F32x4Src1_sf4[i];
+                F32x4Dest_sf4[i*2+1] = F32x4Src2_sf4[i];
+            }
+        '''
+
+    class gem5_mm_unpacklo_pd(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            F64x2Dest_df2[0] = F64x2Src1_df2[0];
+            F64x2Dest_df2[1] = F64x2Src2_df2[0];
+        '''
+
+    class gem5_mm_unpackhi_ps(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i = 0; i < 2; i++) {
+                F32x4Dest_sf4[i*2  ] = F32x4Src1_sf4[i+2];
+                F32x4Dest_sf4[i*2+1] = F32x4Src2_sf4[i+2];
+            }
+        '''
+
+    class gem5_mm_unpackhi_pd(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            F64x2Dest_df2[0] = F64x2Src1_df2[1];
+            F64x2Dest_df2[1] = F64x2Src2_df2[1];
+        '''
+
+    class gem5_mm_unpacklo_epi8(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<8; i++) {
+                Iu8x16Dest_ub16[i*2  ] = Iu8x16Src1_ub16[i];
+                Iu8x16Dest_ub16[i*2+1] = Iu8x16Src2_ub16[i];
+            }
+        '''
+
+    class gem5_mm_unpacklo_epi16(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<4; i++) {
+                Iu16x8Dest_uw8[i*2  ] = Iu16x8Src1_uw8[i];
+                Iu16x8Dest_uw8[i*2+1] = Iu16x8Src2_uw8[i];
+            }
+        '''
+
+    class gem5_mm_unpacklo_epi32(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<2; i++) {
+                Iu32x4Dest_udw4[i*2  ] = Iu32x4Src1_udw4[i];
+                Iu32x4Dest_udw4[i*2+1] = Iu32x4Src2_udw4[i];
+            }
+        '''
+
+    class gem5_mm_unpacklo_epi64(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src2_uqw2[0];
+        '''
+
+    class gem5_mm_unpackhi_epi8(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<8; i++) {
+                Iu8x16Dest_ub16[i*2  ] = Iu8x16Src1_ub16[i+8];
+                Iu8x16Dest_ub16[i*2+1] = Iu8x16Src2_ub16[i+8];
+            }
+        '''
+
+    class gem5_mm_unpackhi_epi16(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<4; i++) {
+                Iu16x8Dest_uw8[i*2  ] = Iu16x8Src1_uw8[i+4];
+                Iu16x8Dest_uw8[i*2+1] = Iu16x8Src2_uw8[i+4];
+            }
+        '''
+
+    class gem5_mm_unpackhi_epi32(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<2; i++) {
+                Iu32x4Dest_udw4[i*2  ] = Iu32x4Src1_udw4[i+2];
+                Iu32x4Dest_udw4[i*2+1] = Iu32x4Src2_udw4[i+2];
+            }
+        '''
+
+    class gem5_mm_unpackhi_epi64(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[1];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src2_uqw2[1];
+        '''
+
+    class sse_pack(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            assert(srcSize == destSize * 2);
+            int items = (sizeof(double) / destSize);
+            int destBits = destSize * 8;
+            int srcBits = srcSize * 8;
+
+            int i;
+            uint64_t result = 0;
+            for (i = 0; i < items / 2; i++) {
+                uint64_t picked =
+                    bits(Iu64x2Src1_uqw2[0], (i + 1) * srcBits - 1,
+                                        (i + 0) * srcBits);
+                unsigned signBit = bits(picked, srcBits - 1);
+                uint64_t overflow = bits(picked, srcBits - 1, destBits - 1);
+
+                // Handle saturation.
+                if (signBit) {
+                    if (overflow != mask(destBits - srcBits + 1)) {
+                        if (signedOp())
+                            picked = (ULL(1) << (destBits - 1));
+                        else
+                            picked = 0;
+                    }
+                } else {
+                    if (overflow != 0) {
+                        if (signedOp())
+                            picked = mask(destBits - 1);
+                        else
+                            picked = mask(destBits);
+                    }
+                }
+                result = insertBits(result,
+                                    (i + 1) * destBits - 1,
+                                    (i + 0) * destBits,
+                                    picked);
+            }
+            for (;i < items; i++) {
+                uint64_t picked =
+                    bits(Iu64x2Src1_uqw2[1], (i - items + 1) * srcBits - 1,
+                                        (i - items + 0) * srcBits);
+                unsigned signBit = bits(picked, srcBits - 1);
+                uint64_t overflow = bits(picked, srcBits - 1, destBits - 1);
+
+                // Handle saturation.
+                if (signBit) {
+                    if (overflow != mask(destBits - srcBits + 1)) {
+                        if (signedOp())
+                            picked = (ULL(1) << (destBits - 1));
+                        else
+                            picked = 0;
+                    }
+                } else {
+                    if (overflow != 0) {
+                        if (signedOp())
+                            picked = mask(destBits - 1);
+                        else
+                            picked = mask(destBits);
+                    }
+                }
+                result = insertBits(result,
+                                    (i + 1) * destBits - 1,
+                                    (i + 0) * destBits,
+                                    picked);
+            }
+            Iu64x2Dest_uqw2[0] = result;
+
+            result = 0;
+            for (i = 0; i < items / 2; i++) {
+                uint64_t picked =
+                    bits(Iu64x2Src2_uqw2[0], (i + 1) * srcBits - 1,
+                                        (i + 0) * srcBits);
+                unsigned signBit = bits(picked, srcBits - 1);
+                uint64_t overflow = bits(picked, srcBits - 1, destBits - 1);
+
+                // Handle saturation.
+                if (signBit) {
+                    if (overflow != mask(destBits - srcBits + 1)) {
+                        if (signedOp())
+                            picked = (ULL(1) << (destBits - 1));
+                        else
+                            picked = 0;
+                    }
+                } else {
+                    if (overflow != 0) {
+                        if (signedOp())
+                            picked = mask(destBits - 1);
+                        else
+                            picked = mask(destBits);
+                    }
+                }
+                result = insertBits(result,
+                                    (i + 1) * destBits - 1,
+                                    (i + 0) * destBits,
+                                    picked);
+            }
+            for (;i < items; i++) {
+                uint64_t picked =
+                    bits(Iu64x2Src2_uqw2[1], (i - items + 1) * srcBits - 1,
+                                        (i - items + 0) * srcBits);
+                unsigned signBit = bits(picked, srcBits - 1);
+                uint64_t overflow = bits(picked, srcBits - 1, destBits - 1);
+
+                // Handle saturation.
+                if (signBit) {
+                    if (overflow != mask(destBits - srcBits + 1)) {
+                        if (signedOp())
+                            picked = (ULL(1) << (destBits - 1));
+                        else
+                            picked = 0;
+                    }
+                } else {
+                    if (overflow != 0) {
+                        if (signedOp())
+                            picked = mask(destBits - 1);
+                        else
+                            picked = mask(destBits);
+                    }
+                }
+                result = insertBits(result,
+                                    (i + 1) * destBits - 1,
+                                    (i + 0) * destBits,
+                                    picked);
+            }
+            Iu64x2Dest_uqw2[1] = result;
+        '''
+
+    class sse_mxor(SSEOp):
+        def __init__(self, dest, src1, src2):
+            super(sse_mxor, self).__init__(dest, src1, src2, 1)
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0] ^ Iu64x2Src2_uqw2[0];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[1] ^ Iu64x2Src2_uqw2[1];
+        '''
+
+    class sse_mor(SSEOp):
+        def __init__(self, dest, src1, src2):
+            super(sse_mor, self).__init__(dest, src1, src2, 1)
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0] | Iu64x2Src2_uqw2[0];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[1] | Iu64x2Src2_uqw2[1];
+        '''
+
+    class sse_mand(SSEOp):
+        def __init__(self, dest, src1, src2):
+            super(sse_mand, self).__init__(dest, src1, src2, 1)
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0] & Iu64x2Src2_uqw2[0];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[1] & Iu64x2Src2_uqw2[1];
+        '''
+
+    class sse_mandn(SSEOp):
+        def __init__(self, dest, src1, src2):
+            super(sse_mandn, self).__init__(dest, src1, src2, 1)
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = ~Iu64x2Src1_uqw2[0] & Iu64x2Src2_uqw2[0];
+            Iu64x2Dest_uqw2[1] = ~Iu64x2Src1_uqw2[1] & Iu64x2Src2_uqw2[1];
+        '''
+
+    class sse_mminf(SSEOp):
+        op_class = 'SimdFloatCmpOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            assert(srcSize == 4 || srcSize == 8);
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    double arg1, arg2;
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+    
+                    if (size == 4) {
+                        floatInt fi;
+                        fi.i = arg1Bits;
+                        arg1 = fi.f;
+                        fi.i = arg2Bits;
+                        arg2 = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = arg1Bits;
+                        arg1 = di.d;
+                        di.i = arg2Bits;
+                        arg2 = di.d;
+                    }
+    
+                    if (arg1 < arg2) {
+                        result = insertBits(result, hiIndex, loIndex, arg1Bits);
+                    } else {
+                        result = insertBits(result, hiIndex, loIndex, arg2Bits);
+                    }
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_mmaxf(SSEOp):
+        op_class = 'SimdFloatCmpOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            assert(srcSize == 4 || srcSize == 8);
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    double arg1, arg2;
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+    
+                    if (size == 4) {
+                        floatInt fi;
+                        fi.i = arg1Bits;
+                        arg1 = fi.f;
+                        fi.i = arg2Bits;
+                        arg2 = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = arg1Bits;
+                        arg1 = di.d;
+                        di.i = arg2Bits;
+                        arg2 = di.d;
+                    }
+    
+                    if (arg1 > arg2) {
+                        result = insertBits(result, hiIndex, loIndex, arg1Bits);
+                    } else {
+                        result = insertBits(result, hiIndex, loIndex, arg2Bits);
+                    }
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class gem5_mm_min_epi8(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Is8x16Dest_sb16[i] = min(Is8x16Src1_sb16[i],Is8x16Src2_sb16[i]);
+        '''
+
+    class gem5_mm_min_epi32(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Is32x4Dest_sdw4[i] = min(Is32x4Src1_sdw4[i],Is32x4Src2_sdw4[i]);
+        '''
+
+    class gem5_mm_min_epu8(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Iu8x16Dest_ub16[i] = min(Iu8x16Src1_ub16[i],Iu8x16Src2_ub16[i]);
+        '''
+
+    class gem5_mm_min_epu16(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Iu16x8Dest_uw8[i] = min(Iu16x8Src1_uw8[i],Iu16x8Src2_uw8[i]);
+        '''
+
+    class gem5_mm_min_epu32(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] = min(Iu32x4Src1_udw4[i],Iu32x4Src2_udw4[i]);
+        '''
+
+    class gem5_mm_max_epi8(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Is8x16Dest_sb16[i] = max(Is8x16Src1_sb16[i],Is8x16Src2_sb16[i]);
+        '''
+
+    class gem5_mm_max_epi32(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Is32x4Dest_sdw4[i] = max(Is32x4Src1_sdw4[i],Is32x4Src2_sdw4[i]);
+        '''
+
+    class gem5_mm_max_epu8(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Iu8x16Dest_ub16[i] = max(Iu8x16Src1_ub16[i],Iu8x16Src2_ub16[i]);
+        '''
+
+    class gem5_mm_max_epu16(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Iu16x8Dest_uw8[i] = max(Iu16x8Src1_uw8[i],Iu16x8Src2_uw8[i]);
+        '''
+
+    class gem5_mm_max_epu32(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] = max(Iu32x4Src1_udw4[i],Iu32x4Src2_udw4[i]);
+        '''
+
+    class sse_mmini(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    int64_t arg1 = arg1Bits |
+                        (0 - (arg1Bits & (ULL(1) << (sizeBits - 1))));
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    int64_t arg2 = arg2Bits |
+                        (0 - (arg2Bits & (ULL(1) << (sizeBits - 1))));
+                    uint64_t resBits;
+    
+                    if (signedOp()) {
+                        if (arg1 < arg2) {
+                            resBits = arg1Bits;
+                        } else {
+                            resBits = arg2Bits;
+                        }
+                    } else {
+                        if (arg1Bits < arg2Bits) {
+                            resBits = arg1Bits;
+                        } else {
+                            resBits = arg2Bits;
+                        }
+                    }
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_mmaxi(SSEOp):
+        op_class = 'SimdCmpOp'
+        code = '''
+
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    int64_t arg1 = arg1Bits |
+                        (0 - (arg1Bits & (ULL(1) << (sizeBits - 1))));
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    int64_t arg2 = arg2Bits |
+                        (0 - (arg2Bits & (ULL(1) << (sizeBits - 1))));
+                    uint64_t resBits;
+    
+                    if (signedOp()) {
+                        if (arg1 > arg2) {
+                            resBits = arg1Bits;
+                        } else {
+                            resBits = arg2Bits;
+                        }
+                    } else {
+                        if (arg1Bits > arg2Bits) {
+                            resBits = arg1Bits;
+                        } else {
+                            resBits = arg2Bits;
+                        }
+                    }
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_msqrt(SSEOp):
+        op_class = 'SimdFloatSqrtOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_msqrt, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            assert(srcSize == 4 || srcSize == 8);
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+    
+                    if (size == 4) {
+                        floatInt fi;
+                        fi.i = argBits;
+                        fi.f = sqrt(fi.f);
+                        argBits = fi.i;
+                    } else {
+                        doubleInt di;
+                        di.i = argBits;
+                        di.d = sqrt(di.d);
+                        argBits = di.i;
+                    }
+                    result = insertBits(result, hiIndex, loIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    # compute approximate reciprocal --- single-precision only
+    class sse_mrcp(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_mrcp, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatAluOp'
+        code = '''
+            assert(srcSize == 4);  // ISA defines single-precision only
+            assert(srcSize == destSize);
+            const int size = 4;
+            const int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+    
+                    floatInt fi;
+                    fi.i = argBits;
+                    // This is more accuracy than HW provides, but oh well
+                    fi.f = 1.0 / fi.f;
+                    argBits = fi.i;
+                    result = insertBits(result, hiIndex, loIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class gem5_mm_add_ss(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            F32x4Dest_sf4 = F32x4Dest_sf4;
+            F32x4Dest_sf4[0] = F32x4Src1_sf4[0] + F32x4Src2_sf4[0];
+        '''
+
+    class gem5_mm_add_sd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            F64x2Dest_df2 = F64x2Dest_df2;
+            F64x2Dest_df2[0] = F64x2Src1_df2[0] + F64x2Src2_df2[0];
+        '''
+
+    class gem5_mm_add_ps(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = F32x4Src1_sf4[i] + F32x4Src2_sf4[i];
+        '''
+
+    class gem5_mm_add_pd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = F64x2Src1_df2[i] + F64x2Src2_df2[i];
+        '''
+
+    class gem5_mm_hadd_epi16(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            auto arg1 = Is16x8Src1_sw8;
+            auto arg2 = Is16x8Src2_sw8;
+            for(int i=0; i<4; i++)
+                Is16x4DestE0_sw4[i] = arg1[2*i] + arg1[2*i+1];
+            for(int i=0; i<4; i++)
+                Is16x4DestE1_sw4[i] = arg2[2*i] + arg2[2*i+1];
+        '''
+
+    class gem5_mm_hadds_epi16(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            auto arg1 = Is16x8Src1_sw8;
+            auto arg2 = Is16x8Src2_sw8;
+            for(int i=0; i<4; i++)
+                Is16x4DestE0_sw4[i] = sadd16(arg1[2*i], arg1[2*i+1]);
+            for(int i=0; i<4; i++)
+                Is16x4DestE1_sw4[i] = sadd16(arg2[2*i], arg2[2*i+1]);
+        '''
+
+    class gem5_mm_hadd_epi32(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            auto arg1 = Is32x4Src1_sdw4;
+            auto arg2 = Is32x4Src2_sdw4;
+            for(int i=0; i<2; i++)
+                Is32x2DestE0_sdw2[i] = arg1[2*i] + arg1[2*i+1];
+            for(int i=0; i<2; i++)
+                Is32x2DestE1_sdw2[i] = arg2[2*i] + arg2[2*i+1];
+        '''
+
+    class gem5_mm_addsub_ps(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            for(int i = 0; i < 2; i++) {
+                F32x4Dest_sf4[i*2] =
+                    F32x4Src1_sf4[i*2] - F32x4Src2_sf4[i*2];
+                F32x4Dest_sf4[i*2+1] =
+                    F32x4Src1_sf4[i*2+1] + F32x4Src2_sf4[i*2+1];
+            }
+        '''
+
+    class gem5_mm_addsub_pd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            F64x2Dest_df2[0] = F64x2Src1_df2[0] - F64x2Src2_df2[0];
+            F64x2Dest_df2[1] = F64x2Src1_df2[1] + F64x2Src2_df2[1];
+        '''
+
+    class gem5_mm_sub_ss(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            F32x4Dest_sf4 = F32x4Dest_sf4;
+            F32x4Dest_sf4[0] = F32x4Src1_sf4[0] - F32x4Src2_sf4[0];
+        '''
+
+    class gem5_mm_sub_sd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            F64x2Dest_df2[0] = F64x2Src1_df2[0] - F64x2Src2_df2[0];
+            F64x2Dest_df2[1] = F64x2Dest_df2[1];
+        '''
+
+    class gem5_mm_sub_ps(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = F32x4Src1_sf4[i] - F32x4Src2_sf4[i];
+        '''
+
+    class gem5_mm_sub_pd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = F64x2Src1_df2[i] - F64x2Src2_df2[i];
+        '''
+
+    class gem5_mm_hsub_epi16(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            auto arg1 = Is16x8Src1_sw8;
+            auto arg2 = Is16x8Src2_sw8;
+            for(int i=0; i<4; i++)
+                Is16x4DestE0_sw4[i] = arg1[2*i] - arg1[2*i+1];
+            for(int i=0; i<4; i++)
+                Is16x4DestE1_sw4[i] = arg2[2*i] - arg2[2*i+1];
+        '''
+
+    class gem5_mm_hsubs_epi16(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            auto arg1 = Is16x8Src1_sw8;
+            auto arg2 = Is16x8Src2_sw8;
+            for(int i=0; i<4; i++)
+                Is16x4DestE0_sw4[i] = ssub16(arg1[2*i], arg1[2*i+1]);
+            for(int i=0; i<4; i++)
+                Is16x4DestE1_sw4[i] = ssub16(arg2[2*i], arg2[2*i+1]);
+        '''
+
+    class gem5_mm_hsub_epi32(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            auto arg1 = Is32x4Src1_sdw4;
+            auto arg2 = Is32x4Src2_sdw4;
+            for(int i=0; i<2; i++)
+                Is32x2DestE0_sdw2[i] = arg1[2*i] - arg1[2*i+1];
+            for(int i=0; i<2; i++)
+                Is32x2DestE1_sdw2[i] = arg2[2*i] - arg2[2*i+1];
+        '''
+
+    class gem5_mm_mul_ss(SSEOp):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            F32x4Dest_sf4 = F32x4Dest_sf4;
+            F32x4Dest_sf4[0] = F32x4Src1_sf4[0] * F32x4Src2_sf4[0];
+        '''
+
+    class gem5_mm_mul_sd(SSEOp):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            F64x2Dest_df2[0] = F64x2Src1_df2[0] * F64x2Src2_df2[0];
+            F64x2Dest_df2[1] = F64x2Dest_df2[1];
+        '''
+
+    class gem5_mm_mul_ps(SSEOp):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = F32x4Src1_sf4[i] * F32x4Src2_sf4[i];
+        '''
+
+    class gem5_mm_mul_pd(SSEOp):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = F64x2Src1_df2[i] * F64x2Src2_df2[i];
+        '''
+
+    class gem5_mm_mulhrs_epi16(SSEOp):
+        op_class = 'SimdMultOp'
+        code = '''
+            for(int i=0; i<8; i++) {
+                int16_t arg1 = Is16x8Src1_sw8[i];
+                int16_t arg2 = Is16x8Src2_sw8[i];
+                int32_t res = ((arg1 * arg2) >> 14) + 1;
+                Iu16x8Dest_uw8[i] = (res >> 1) & 0xFFFF;
+            }
+        '''
+
+    class gem5_mm_mullo_epi32(SSEOp):
+        op_class = 'SimdMultOp'
+        code = '''
+            for(int i=0; i<4; i++) {
+                int64_t res = Is32x4Src1_sdw4[i] * Is32x4Src2_sdw4[i];
+                Iu32x4Dest_udw4[i] = res & mask(32);
+            }
+        '''
+
+    class gem5_mm_mul_epi32(SSEOp):
+        op_class = 'SimdFloatMultOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = F32x4Src1_sf4[i*2] * F32x4Src2_sf4[i*2];
+        '''
+
+    class gem5_mm_div_ss(SSEOp):
+        op_class = 'SimdFloatDivOp'
+        code = '''
+            F32x4Dest_sf4 = F32x4Dest_sf4;
+            F32x4Dest_sf4[0] = F32x4Src1_sf4[0] / F32x4Src2_sf4[0];
+        '''
+
+    class gem5_mm_div_sd(SSEOp):
+        op_class = 'SimdFloatDivOp'
+        code = '''
+            F64x2Dest_df2[0] = F64x2Src1_df2[0] / F64x2Src2_df2[0];
+            F64x2Dest_df2[1] = F64x2Dest_df2[1];
+        '''
+
+    class gem5_mm_div_ps(SSEOp):
+        op_class = 'SimdFloatDivOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = F32x4Src1_sf4[i] / F32x4Src2_sf4[i];
+        '''
+
+    class gem5_mm_div_pd(SSEOp):
+        op_class = 'SimdFloatDivOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = F64x2Src1_df2[i] / F64x2Src2_df2[i];
+        '''
+
+    class gem5_mm_adds_epu8(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            for(int i=0; i<16; i++) {
+                uint8_t arg1 = Iu8x16Src1_ub16[i];
+                uint8_t arg2 = Iu8x16Src2_ub16[i];
+                Iu8x16Dest_ub16[i] = saddu8(arg1, arg2);
+            }
+        '''
+
+    class gem5_mm_adds_epu16(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            for(int i=0; i<8; i++) {
+                uint16_t arg1 = Iu16x8Src1_uw8[i];
+                uint16_t arg2 = Iu16x8Src2_uw8[i];
+                Iu16x8Dest_uw8[i] = saddu16(arg1, arg2);
+            }
+        '''
+
+    class sse_maddi(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    uint64_t resBits = arg1Bits + arg2Bits;
+    
+                    if (ext & 0x2) {
+                        if (signedOp()) {
+                            int arg1Sign = bits(arg1Bits, sizeBits - 1);
+                            int arg2Sign = bits(arg2Bits, sizeBits - 1);
+                            int resSign = bits(resBits, sizeBits - 1);
+                            if ((arg1Sign == arg2Sign) && (arg1Sign != resSign)) {
+                                if (resSign == 0)
+                                    resBits = (ULL(1) << (sizeBits - 1));
+                                else
+                                    resBits = mask(sizeBits - 1);
+                            }
+                        } else {
+                            if (findCarry(sizeBits, resBits, arg1Bits, arg2Bits))
+                                resBits = mask(sizeBits);
+                        }
+                    }
+    
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_msubi(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    uint64_t resBits = arg1Bits - arg2Bits;
+    
+                    if (ext & 0x2) {
+                        if (signedOp()) {
+                            int arg1Sign = bits(arg1Bits, sizeBits - 1);
+                            int arg2Sign = !bits(arg2Bits, sizeBits - 1);
+                            int resSign = bits(resBits, sizeBits - 1);
+                            if ((arg1Sign == arg2Sign) && (arg1Sign != resSign)) {
+                                if (resSign == 0)
+                                    resBits = (ULL(1) << (sizeBits - 1));
+                                else
+                                    resBits = mask(sizeBits - 1);
+                            }
+                        } else {
+                            if (arg2Bits > arg1Bits) {
+                                resBits = 0;
+                            } else if (!findCarry(sizeBits, resBits,
+                                                 arg1Bits, ~arg2Bits)) {
+                                resBits = mask(sizeBits);
+                            }
+                        }
+                    }
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_mmuli(SSEOp):
+        op_class = 'SimdMultOp'
+        code = '''
+            int srcBits = srcSize * 8;
+            int destBits = destSize * 8;
+            assert(destBits <= 64);
+            assert(destSize >= srcSize);
+            int items = numItems(destSize);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int offset = 0;
+                    if (ext & 16) {
+                        if (ext & 32)
+                            offset = i * (destBits - srcBits);
+                        else
+                            offset = i * (destBits - srcBits) + srcBits;
+                    }
+                    int srcHiIndex = (i + 1) * srcBits - 1 + offset;
+                    int srcLoIndex = (i + 0) * srcBits + offset;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], srcHiIndex, srcLoIndex);
+                    uint64_t resBits;
+    
+                    if (signedOp()) {
+                        int64_t arg1 = arg1Bits |
+                            (0 - (arg1Bits & (ULL(1) << (srcBits - 1))));
+                        int64_t arg2 = arg2Bits |
+                            (0 - (arg2Bits & (ULL(1) << (srcBits - 1))));
+                        resBits = (uint64_t)(arg1 * arg2);
+                    } else {
+                        resBits = arg1Bits * arg2Bits;
+                    }
+    
+                    if (ext & 0x4)
+                        resBits += (ULL(1) << (destBits - 1));
+    
+                    if (multHi())
+                        resBits >>= destBits;
+    
+                    int destHiIndex = (i + 1) * destBits - 1;
+                    int destLoIndex = (i + 0) * destBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_mavg(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    uint64_t resBits = (arg1Bits + arg2Bits + 1) / 2;
+    
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_msad(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            int srcBits = srcSize * 8;
+            int items = sizeof(double) / srcSize;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t sum = 0;
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * srcBits - 1;
+                    int loIndex = (i + 0) * srcBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    int64_t resBits = arg1Bits - arg2Bits;
+                    if (resBits < 0)
+                        resBits = -resBits;
+                    sum += resBits;
+                }
+                Iu64x2Dest_uqw2[idx] = sum & mask(destSize * 8);
+            }
+        '''
+
+    class gem5_mm_round_ss(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            uint64_t RoundMode = op2_uqw & mask(2);
+            float farg1 = F32x4Src1_sf4[0];
+            int32_t iarg = 0;
+            switch(RoundMode) {
+            case 0:
+                iarg = round(farg1);
+                if( (farg1-iarg) == 0.5 )
+                    iarg = (iarg / 2) * 2;
+                break;
+            case 1:
+                iarg = floor(farg1);
+                break;
+            case 2:
+                iarg = ceil(farg1);
+                break;
+            case 3:
+                iarg = (farg1 >= 0.0) ? floor(farg1) : ceil(farg1);
+                break;
+            }
+            F32x4Dest_sf4 = F32x4Dest_sf4;
+            F32x4Dest_sf4[0] = iarg;
+        '''
+
+    class gem5_mm_round_sd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            uint64_t RoundMode = op2_uqw & mask(2);
+            double darg1 = F64x2Src1_df2[0];
+            int64_t iarg = 0;
+            switch(RoundMode) {
+            case 0:
+                iarg = round(darg1);
+                if( (darg1-iarg) == 0.5 )
+                    iarg = (iarg / 2) * 2;
+                break;
+            case 1:
+                iarg = floor(darg1);
+                break;
+            case 2:
+                iarg = ceil(darg1);
+                break;
+            case 3:
+                iarg = (darg1 >= 0.0) ? floor(darg1) : ceil(darg1);
+                break;
+            }
+            F64x2Dest_df2[0] = iarg;
+            F64x2Dest_df2[1] = F64x2Dest_df2[1];
+        '''
+
+    class gem5_mm_round_ps(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            uint64_t RoundMode = op2_uqw & mask(2);
+            for(int i=0; i<4; i++) {
+                float farg1 = F32x4Src1_sf4[i];
+                int32_t iarg = 0;
+                switch(RoundMode) {
+                case 0:
+                    iarg = round(farg1);
+                    if( (farg1-iarg) == 0.5 )
+                        iarg = (iarg / 2) * 2;
+                    break;
+                case 1:
+                    iarg = floor(farg1);
+                    break;
+                case 2:
+                    iarg = ceil(farg1);
+                    break;
+                case 3:
+                    iarg = (farg1 >= 0.0) ? floor(farg1) : ceil(farg1);
+                    break;
+                }
+                F32x4Dest_sf4[i] = iarg;
+            }
+        '''
+
+    class gem5_mm_round_pd(SSEOp):
+        op_class = 'SimdFloatAddOp'
+        code = '''
+            uint64_t RoundMode = op2_uqw & mask(2);
+            for(int i=0; i<2; i++) {
+                double darg1 = F64x2Src1_df2[i];
+                int64_t iarg = 0;
+                switch(RoundMode) {
+                case 0:
+                    iarg = round(darg1);
+                    if( (darg1-iarg) == 0.5 )
+                        iarg = (iarg / 2) * 2;
+                    break;
+                case 1:
+                    iarg = floor(darg1);
+                    break;
+                case 2:
+                    iarg = ceil(darg1);
+                    break;
+                case 3:
+                    iarg = (darg1 >= 0.0) ? floor(darg1) : ceil(darg1);
+                    break;
+                }
+                F64x2Dest_df2[i] = iarg;
+            }
+        '''
+
+    class gem5_mm_srl_epi16(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<8; i++) {
+                Iu16x8Dest_uw8[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu16x8Src1_uw8[i] >> shiftAmt);
+            }
+        '''
+
+    class gem5_mm_srli_epi16(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<8; i++) {
+                Iu16x8Dest_uw8[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu16x8Src1_uw8[i] >> shiftAmt);
+            }
+        '''
+
+    class gem5_mm_srl_epi32(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<4; i++) {
+                Iu32x4Dest_udw4[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu32x4Src1_udw4[i] >> shiftAmt);
+            }
+        '''
+
+    class gem5_mm_srli_epi32(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<4; i++) {
+                Iu32x4Dest_udw4[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu32x4Src1_udw4[i] >> shiftAmt);
+            }
+        '''
+
+    class gem5_mm_srl_epi64(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<2; i++) {
+                Iu64x2Dest_uqw2[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu64x2Src1_uqw2[i] >> shiftAmt);
+            }
+        '''
+
+    class gem5_mm_srli_epi64(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<2; i++) {
+                Iu64x2Dest_uqw2[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu64x2Src1_uqw2[i] >> shiftAmt);
+            }
+        '''
+
+    class gem5_mm_srli_si128(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            uint64_t shiftAmt = op2_uqw;
+            if( shiftAmt >= 16)
+                Iu64x2Dest_uqw2 = {0};
+            else if( shiftAmt >= 8 ) {
+                Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[1] >> ((shiftAmt-8)*8);
+                Iu64x2Dest_uqw2[1] = 0;
+            }
+            else {
+                Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0] >> (shiftAmt*8) |
+                                       Iu64x2Src1_uqw2[1] << ((8-shiftAmt)*8);
+                Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[1] >> (shiftAmt*8);
+            }
+        '''
+
+    class sse_msrl(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            uint64_t shiftAmt = op2_uqw;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t resBits;
+                    if (shiftAmt >= sizeBits) {
+                        resBits = 0;
+                    } else {
+                        resBits = (arg1Bits >> shiftAmt) &
+                            mask(sizeBits - shiftAmt);
+                    }
+    
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class gem5_mm_sra_epi16(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<8; i++) {
+                uint16_t arg1Bits = Iu16x8Src1_uw8[i];
+                uint16_t resBits;
+                if( shiftAmt >= sizeBits )
+                    resBits = ( bits(arg1Bits, sizeBits-1) ) ? ( mask(sizeBits) ) : ( 0 );
+                else {
+                    resBits = arg1Bits >> shiftAmt;
+                    resBits |= (0 - (resBits & (ULL(1) << (sizeBits-1-shiftAmt))));
+                }
+                Iu16x8Dest_uw8[i] = resBits;
+            }
+        '''
+
+    class gem5_mm_srai_epi16(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<8; i++) {
+                uint16_t arg1Bits = Iu16x8Src1_uw8[i];
+                uint16_t resBits;
+                if( shiftAmt >= sizeBits )
+                    resBits = ( bits(arg1Bits, sizeBits-1) ) ? ( mask(sizeBits) ) : ( 0 );
+                else {
+                    resBits = arg1Bits >> shiftAmt;
+                    resBits |= (0 - (resBits & (ULL(1) << (sizeBits-1-shiftAmt))));
+                }
+                Iu16x8Dest_uw8[i] = resBits;
+            }
+        '''
+
+    class gem5_mm_sra_epi32(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<4; i++) {
+                uint32_t arg1Bits = Iu32x4Src1_udw4[i];
+                uint32_t resBits;
+                if( shiftAmt >= sizeBits )
+                    resBits = ( bits(arg1Bits, sizeBits-1) ) ? ( mask(sizeBits) ) : ( 0 );
+                else {
+                    resBits = arg1Bits >> shiftAmt;
+                    resBits |= (0 - (resBits & (ULL(1) << (sizeBits-1-shiftAmt))));
+                }
+                Iu32x4Dest_udw4[i] = resBits;
+            }
+        '''
+
+    class gem5_mm_srai_epi32(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<4; i++) {
+                uint32_t arg1Bits = Iu32x4Src1_udw4[i];
+                uint32_t resBits;
+                if( shiftAmt >= sizeBits )
+                    resBits = ( bits(arg1Bits, sizeBits-1) ) ? ( mask(sizeBits) ) : ( 0 );
+                else {
+                    resBits = arg1Bits >> shiftAmt;
+                    resBits |= (0 - (resBits & (ULL(1) << (sizeBits-1-shiftAmt))));
+                }
+                Iu32x4Dest_udw4[i] = resBits;
+            }
+        '''
+
+    class gem5_mm_sll_epi16(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<8; i++) {
+                Iu16x8Dest_uw8[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu16x8Src1_uw8[i] << shiftAmt);
+            }
+        '''
+
+    class gem5_mm_slli_epi16(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<8; i++) {
+                Iu16x8Dest_uw8[i] = 
+                    (shiftAmt >= sizeBits) ?
+                        (0) : (Iu16x8Src1_uw8[i] << shiftAmt);
+            }
+        '''
+
+    class gem5_mm_sll_epi32(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<4; i++) {
+                Iu32x4Dest_udw4[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu32x4Src1_udw4[i] << shiftAmt);
+            }
+        '''
+
+    class gem5_mm_slli_epi32(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<4; i++) {
+                Iu32x4Dest_udw4[i] =
+                    (shiftAmt >= sizeBits) ?
+                        (0) : (Iu32x4Src1_udw4[i] << shiftAmt);
+            }
+        '''
+
+    class gem5_mm_sll_epi64(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = Iu64x2Src2_uqw2[0];
+            for(int i=0; i<2; i++) {
+                Iu64x2Dest_uqw2[i] = (shiftAmt >= sizeBits) ?
+                        (0) : (Iu64x2Src1_uqw2[i] << shiftAmt);
+            }
+        '''
+
+    class gem5_mm_slli_epi64(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            int sizeBits = srcSize * 8;
+            uint64_t shiftAmt = op2_uqw;
+            for(int i=0; i<2; i++) {
+                Iu64x2Dest_uqw2[i] =
+                    (shiftAmt >= sizeBits) ?
+                        (0) : (Iu64x2Src1_uqw2[i] << shiftAmt);
+            }
+        '''
+
+    class gem5_mm_slli_si128(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            uint64_t shiftAmt = op2_uqw;
+            if( shiftAmt >= 16)
+                Iu64x2Dest_uqw2 = {0};
+            else if( shiftAmt >= 8 ) {
+                Iu64x2Dest_uqw2[0] = 0;
+                Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[0] << ((shiftAmt-8)*8);
+            }
+            else {
+                Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0] << (shiftAmt*8);
+                Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[1] << (shiftAmt*8) |
+                                       Iu64x2Src1_uqw2[0] >> ((8-shiftAmt)*8);
+            }
+        '''
+
+    class gem5_mm_alignr_epi8(SSEOp):
+        op_class = 'SimdShiftOp'
+        code = '''
+            uint8_t result[32];
+            uint8_t shiftAmt = ext & mask(8);
+            for(int i=0; i<16; i++) {
+                result[i   ] = Iu8x16Src2_ub16[i];
+                result[i+16] = Iu8x16Src1_ub16[i];
+            }
+            for(int i=0; i<16; i++)
+                Iu8x32Dest_ub32[i] = result[i+shiftAmt];
+            for(int i=16; i<32; i++)
+                Iu8x32Dest_ub32[i] = Iu8x32Dest_ub32[i];
+        '''
+
+    class sse_cvtf2i_vec2fp(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvtf2i_vec2fp, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = FpDestReg_uqw;
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+                    double arg;
+    
+                    if (srcSize == 4) {
+                        floatInt fi;
+                        fi.i = argBits;
+                        arg = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = argBits;
+                        arg = di.d;
+                    }
+    
+                    if (ext & 0x4) {
+                        if (arg >= 0)
+                            arg += 0.5;
+                        else
+                            arg -= 0.5;
+                    }
+    
+                    if (destSize == 4) {
+                        int32_t i_arg = (int32_t)arg;
+                        argBits = *((uint32_t*)&i_arg);
+                    } else {
+                        int64_t i_arg = (int64_t)arg;
+                        argBits = *((uint64_t*)&i_arg);
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                FpDestReg_uqw = result;
+            }
+        '''
+
+    class sse_cvtf2i_vec2vec(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvtf2i_vec2vec, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+    
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+                    double arg;
+    
+                    if (srcSize == 4) {
+                        floatInt fi;
+                        fi.i = argBits;
+                        arg = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = argBits;
+                        arg = di.d;
+                    }
+    
+                    if (ext & 0x4) {
+                        if (arg >= 0)
+                            arg += 0.5;
+                        else
+                            arg -= 0.5;
+                    }
+    
+                    if (destSize == 4) {
+                        int32_t i_arg = (int32_t)arg;
+                        argBits = *((uint32_t*)&i_arg);
+                    } else {
+                        int64_t i_arg = (int64_t)arg;
+                        argBits = *((uint64_t*)&i_arg);
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_cvtf2i_vec2veclo(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvtf2i_vec2veclo, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = Iu64x2Dest_uqw2[0];
+    
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+                    double arg;
+    
+                    if (srcSize == 4) {
+                        floatInt fi;
+                        fi.i = argBits;
+                        arg = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = argBits;
+                        arg = di.d;
+                    }
+    
+                    if (ext & 0x4) {
+                        if (arg >= 0)
+                            arg += 0.5;
+                        else
+                            arg -= 0.5;
+                    }
+    
+                    if (destSize == 4) {
+                        int32_t i_arg = (int32_t)arg;
+                        argBits = *((uint32_t*)&i_arg);
+                    } else {
+                        int64_t i_arg = (int64_t)arg;
+                        argBits = *((uint64_t*)&i_arg);
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[0] = result;
+            }
+        '''
+
+    class sse_cvti2f_vec2vec(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvti2f_vec2vec, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+    
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+    
+                    int64_t sArg = argBits |
+                        (0 - (argBits & (ULL(1) << (srcSizeBits - 1))));
+                    double arg = sArg;
+    
+                    if (destSize == 4) {
+                        floatInt fi;
+                        fi.f = arg;
+                        argBits = fi.i;
+                    } else {
+                        doubleInt di;
+                        di.d = arg;
+                        argBits = di.i;
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+#            F64x2DestE0_df2[0] = ( srcSize == 8 ) ? ((double) FpSrcReg1_uqw) :
+#							 ((double) (*((int32_t *) &FpSrcReg1_uqw)));
+    class gem5_mm_cvtsi32n64_sd(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtsi32n64_sd, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(srcSize == 4 || srcSize == 8);
+            F64x2DestE0_df2[0] = ( srcSize == 8 ) ? ((double) SrcReg1_uqw) :
+							 ((double) (*((int32_t *) &SrcReg1_uqw)));
+            F64x2DestE0_df2[1] = F64x2Dest_df2[1];
+            F64x2DestE1_df2 = F64x2DestE1_df2;
+        '''
+
+    class sse_cvti2f_fp2vec(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvti2f_fp2vec, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+    
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(SrcReg1_uqw, srcHiIndex, srcLoIndex);
+    
+                    int64_t sArg = argBits |
+                        (0 - (argBits & (ULL(1) << (srcSizeBits - 1))));
+                    double arg = sArg;
+    
+                    if (destSize == 4) {
+                        floatInt fi;
+                        fi.f = arg;
+                        argBits = fi.i;
+                    } else {
+                        doubleInt di;
+                        di.d = arg;
+                        argBits = di.i;
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_cvtf2f(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvtf2f, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+    
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+                    double arg;
+    
+                    if (srcSize == 4) {
+                        floatInt fi;
+                        fi.i = argBits;
+                        arg = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = argBits;
+                        arg = di.d;
+                    }
+                    if (destSize == 4) {
+                        floatInt fi;
+                        fi.f = arg;
+                        argBits = fi.i;
+                    } else {
+                        doubleInt di;
+                        di.d = arg;
+                        argBits = di.i;
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_cvt_v128tov64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_cvt_v128tov64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(destSize == 4 || destSize == 8);
+            assert(srcSize == 4 || srcSize == 8);
+            int srcSizeBits = srcSize * 8;
+            int destSizeBits = destSize * 8;
+            int items;
+            int srcStart = 0;
+            int destStart = 0;
+            int idx_count = scalarOp() ? 1 : 2;
+
+            for(int idx = 0; idx < idx_count; idx++) {
+                if (srcSize == 2 * destSize) {
+                    items = numItems(srcSize);
+                    if (idx == 1)
+                        destStart = destSizeBits * items;
+                } else if (destSize == 2 * srcSize) {
+                    items = numItems(destSize);
+                    if (idx == 1)
+                        srcStart = srcSizeBits * items;
+                } else {
+                    items = numItems(destSize);
+                }
+                uint64_t result = Iu64x2Dest_uqw2[0];
+                for (int i = 0; i < items; i++) {
+                    int srcHiIndex = srcStart + (i + 1) * srcSizeBits - 1;
+                    int srcLoIndex = srcStart + (i + 0) * srcSizeBits;
+                    uint64_t argBits =
+                        bits(Iu64x2Src1_uqw2[idx], srcHiIndex, srcLoIndex);
+                    double arg;
+    
+                    if (srcSize == 4) {
+                        floatInt fi;
+                        fi.i = argBits;
+                        arg = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = argBits;
+                        arg = di.d;
+                    }
+                    if (destSize == 4) {
+                        floatInt fi;
+                        fi.f = arg;
+                        argBits = fi.i;
+                    } else {
+                        doubleInt di;
+                        di.d = arg;
+                        argBits = di.i;
+                    }
+                    int destHiIndex = destStart + (i + 1) * destSizeBits - 1;
+                    int destLoIndex = destStart + (i + 0) * destSizeBits;
+                    result = insertBits(result, destHiIndex, destLoIndex, argBits);
+                }
+                Iu64x2Dest_uqw2[0] = result;
+            }
+            Iu64x2Dest_uqw2[1] = 0;
+        '''
+
+    class gem5_mm_cmpeq_epi8(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Iu8x16Dest_ub16[i] =
+                    (Iu8x16Src1_ub16[i] == Iu8x16Src2_ub16[i]) ?
+                        (0xFF) : (0);
+        '''
+
+    class gem5_mm_cmpeq_epi16(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Iu16x8Dest_uw8[i] =
+                    (Iu16x8Src1_uw8[i] == Iu16x8Src2_uw8[i]) ?
+                        (0xFFFF) : (0);
+        '''
+
+    class gem5_mm_cmpeq_epi32(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] =
+                    (Iu32x4Src1_udw4[i] == Iu32x4Src2_udw4[i]) ?
+                        (0xFFFFFFFF) : (0);
+        '''
+
+    class gem5_mm_cmpeq_epi64(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Iu64x2Dest_uqw2[i] =
+                    (Iu64x2Src1_uqw2[i] == Iu64x2Src2_uqw2[i]) ?
+                        (0xFFFFFFFFFFFFFFFF) : (0);
+        '''
+
+    class gem5_mm_cmpgt_epi8(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Iu8x16Dest_ub16[i] =
+                    (Iu8x16Src1_ub16[i] > Iu8x16Src2_ub16[i]) ?
+                        (0xFF) : (0);
+        '''
+
+    class gem5_mm_cmpgt_epi16(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Iu16x8Dest_uw8[i] =
+                    (Iu16x8Src1_uw8[i] > Iu16x8Src2_uw8[i]) ?
+                        (0xFFFF) : (0);
+        '''
+
+    class gem5_mm_cmpgt_epi32(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] =
+                    (Iu32x4Src1_udw4[i] > Iu32x4Src2_udw4[i]) ?
+                        (0xFFFFFFFF) : (0);
+        '''
+
+    class gem5_mm_cmpgt_epi64(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Iu64x2Dest_uqw2[i] =
+                    (Iu64x2Src1_uqw2[i] > Iu64x2Src2_uqw2[i]) ?
+                        (0xFFFFFFFFFFFFFFFF) : (0);
+        '''
+
+    class sse_mcmpi2r(SSEOp):
+        op_class = 'SimdCvtOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    int64_t arg1 = arg1Bits |
+                        (0 - (arg1Bits & (ULL(1) << (sizeBits - 1))));
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    int64_t arg2 = arg2Bits |
+                        (0 - (arg2Bits & (ULL(1) << (sizeBits - 1))));
+    
+                    uint64_t resBits = 0;
+                    if (((ext & 0x2) == 0 && arg1 == arg2) ||
+                        ((ext & 0x2) == 0x2 && arg1 > arg2))
+                        resBits = mask(sizeBits);
+    
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_mcmpf2r(SSEOp):
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(srcSize == destSize);
+            int size = srcSize;
+            int sizeBits = size * 8;
+            int items = numItems(size);
+            int idx_count = scalarOp() ? 1 : 2;
+
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            for(int idx = 0; idx < idx_count; idx++) {
+                uint64_t result = Iu64x2Dest_uqw2[idx];
+                for (int i = 0; i < items; i++) {
+                    int hiIndex = (i + 1) * sizeBits - 1;
+                    int loIndex = (i + 0) * sizeBits;
+                    uint64_t arg1Bits =
+                        bits(Iu64x2Src1_uqw2[idx], hiIndex, loIndex);
+                    uint64_t arg2Bits =
+                        bits(Iu64x2Src2_uqw2[idx], hiIndex, loIndex);
+                    double arg1, arg2;
+    
+                    if (size == 4) {
+                        floatInt fi;
+                        fi.i = arg1Bits;
+                        arg1 = fi.f;
+                        fi.i = arg2Bits;
+                        arg2 = fi.f;
+                    } else {
+                        doubleInt di;
+                        di.i = arg1Bits;
+                        arg1 = di.d;
+                        di.i = arg2Bits;
+                        arg2 = di.d;
+                    }
+    
+                    uint64_t resBits = 0;
+                    bool nanop = std::isnan(arg1) || std::isnan(arg2);
+                    switch (ext & mask(3)) {
+                      case 0:
+                        if (arg1 == arg2 && !nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 1:
+                        if (arg1 < arg2 && !nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 2:
+                        if (arg1 <= arg2 && !nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 3:
+                        if (nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 4:
+                        if (arg1 != arg2 || nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 5:
+                        if (!(arg1 < arg2) || nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 6:
+                        if (!(arg1 <= arg2) || nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                      case 7:
+                        if (!nanop)
+                            resBits = mask(sizeBits);
+                        break;
+                    };
+                    result = insertBits(result, hiIndex, loIndex, resBits);
+                }
+                Iu64x2Dest_uqw2[idx] = result;
+            }
+        '''
+
+    class sse_mcmpf2rf(SSEOp):
+        def __init__(self, src1, src2,\
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(sse_mcmpf2rf, self).__init__("InstRegIndex(0)", src1,\
+                    src2, size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            assert(srcSize == destSize);
+            assert(srcSize == 4 || srcSize == 8);
+            int size = srcSize;
+            int sizeBits = size * 8;
+
+            double arg1, arg2;
+            uint64_t arg1Bits = bits(Iu64x1Src1E0_uqw1[0], sizeBits - 1, 0);
+            uint64_t arg2Bits = bits(Iu64x1Src2E0_uqw1[0], sizeBits - 1, 0);
+            if (size == 4) {
+                floatInt fi;
+                fi.i = arg1Bits;
+                arg1 = fi.f;
+                fi.i = arg2Bits;
+                arg2 = fi.f;
+            } else {
+                doubleInt di;
+                di.i = arg1Bits;
+                arg1 = di.d;
+                di.i = arg2Bits;
+                arg2 = di.d;
+            }
+
+            //               ZF PF CF
+            // Unordered      1  1  1
+            // Greater than   0  0  0
+            // Less than      0  0  1
+            // Equal          1  0  0
+            //           OF = SF = AF = 0
+            ccFlagBits = ccFlagBits & ~(SFBit | AFBit | ZFBit | PFBit);
+            cfofBits   = cfofBits   & ~(OFBit | CFBit);
+
+            if (std::isnan(arg1) || std::isnan(arg2)) {
+                ccFlagBits = ccFlagBits | (ZFBit | PFBit);
+                cfofBits = cfofBits | CFBit;
+            }
+            else if(arg1 < arg2)
+                cfofBits = cfofBits | CFBit;
+            else if(arg1 == arg2)
+                ccFlagBits = ccFlagBits | ZFBit;
+        '''
+
+    class sse_mov_vec2vec(FpUnaryOp):
+        code = 'Iu64x2Dest_uqw2 = Iu64x2Src1_uqw2;'
+        else_code = 'Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+        op_class = 'IntAluOp'
+
+    class sse_mov_vec2fp(FpUnaryOp):
+        code = 'FpDestReg_uqw = Iu64x2Src1_uqw2[0];'
+        else_code = 'FpDestReg_uqw = FpDestReg_uqw;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+        op_class = 'IntAluOp'
+
+    class sse_mov_fp2vec(FpUnaryOp):
+        code = '''
+            Iu64x2Dest_uqw2[0] = FpSrcReg1_uqw;
+            Iu64x2Dest_uqw2[1] = 0;
+        '''
+        else_code = 'Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+        op_class = 'IntAluOp'
+
+    class gem5_mm_move_epi64(FpUnaryOp):
+        op_class = 'IntAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0];
+            Iu64x2Dest_uqw2[1] = 0;
+        '''
+        else_code = 'Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_movepi64_pi64(FpUnaryOp):
+        op_class = 'IntAluOp'
+        code = 'FpDestReg_uqw = Iu64x2Src1_uqw2[0];'
+        else_code = 'FpDestReg_uqw = FpDestReg_uqw;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_movehl_ps(FpUnaryOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[1];
+            Iu64x2Dest_uqw2[1] = Iu64x2Dest_uqw2[1];
+        '''
+        else_code = 'Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_movelh_ps(FpUnaryOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Dest_uqw2[0];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[0];
+        '''
+        else_code = 'Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_move_ss(FpUnaryOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu32xMaxDest_maxudw = Iu32xMaxDest_maxudw;
+            Iu32xMaxDest_maxudw[0] = Iu32x4Src1_udw4[0]; 
+        '''
+        else_code = 'Iu32xMaxDest_maxudw = Iu32xMaxDest_maxudw;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_move_sd(FpUnaryOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64xMaxDest_maxuqw = Iu64xMaxDest_maxuqw;
+            Iu64xMaxDest_maxuqw[0] = Iu64x2Src1_uqw2[0]; 
+        '''
+        else_code = 'Iu64xMaxDest_maxuqw = Iu64xMaxDest_maxuqw;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_movedup_pd(FpUnaryOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[0]; 
+            Iu64x2Dest_uqw2[1] = Iu64x2Src1_uqw2[0]; 
+        '''
+        else_code = 'Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;'
+        cond_check = "checkCondition(ccFlagBits | cfofBits | dfBit | \
+                                     ecfBit | ezfBit, src2)"
+
+    class gem5_mm_shuffle_ps(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            uint64_t shiftAmt = ext;
+            for(int i=0; i<2; i++) {
+                Iu32x2DestE0_udw2[i] = Iu32x4Src1_udw4[shiftAmt & 0x03];
+                shiftAmt = shiftAmt >> 2;
+            }
+            for(int i=0; i<2; i++) {
+                Iu32x2DestE1_udw2[i] = Iu32x4Src2_udw4[shiftAmt & 0x03];
+                shiftAmt = shiftAmt >> 2;
+            }
+        '''
+
+    class gem5_mm_shuffle_pd(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            Iu64x2Dest_uqw2[0] = Iu64x2Src1_uqw2[ext & 0x01];
+            Iu64x2Dest_uqw2[1] = Iu64x2Src2_uqw2[(ext >> 1) & 0x01];
+        '''
+
+    class gem5_mm_shuffle_epi8(SSEOp):
+        op_class = 'SimdShuffleOp'
+        code = '''
+            for(int i=0; i<16; i++) {
+                uint8_t arg2 = Iu8x16Src2_ub16[i];
+                Iu8x16Dest_ub16[i] = ( arg2 & 0x80 ) ?
+                        (0) : ( Iu8x16Src1_ub16[arg2 & mask(4)] );
+            }
+        '''
+
+    class gem5_mm_shuffle_epi32(SSEOp):
+        op_class = 'SimdShuffleOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_shuffle_epi32, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] = Iu32x4Src1_udw4[(ext >> (i*2)) & 0x03];
+        '''
+
+    class gem5_mm_shufflelo_epi16(SSEOp):
+        op_class = 'SimdShuffleOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_shufflelo_epi16, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu16x8Dest_uw8[i] = Iu16x8Src1_uw8[(ext >> (i*2) & 0x03)];
+            for(int i=4; i<8; i++)
+                Iu16x8Dest_uw8[i] = Iu16x8Dest_uw8[i];
+        '''
+
+    class gem5_mm_shufflehi_epi16(SSEOp):
+        op_class = 'SimdShuffleOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_shufflehi_epi16, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu16x8Dest_uw8[i] = Iu16x8Dest_uw8[i];
+            for(int i=4; i<8; i++)
+                Iu16x8Dest_uw8[i] = Iu16x8Src1_uw8[4 + (ext >> ((i-4)*2) & 0x03)];
+        '''
+
+    class gem5_mm_madd_epi16(SSEOp):
+        op_class = 'SimdMultOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Is32x4Dest_sdw4[i] =
+                    (Is16x8Src1_sw8[2*i  ] * Is16x8Src2_sw8[2*i  ]) +
+                    (Is16x8Src1_sw8[2*i+1] * Is16x8Src2_sw8[2*i+1]);
+        '''
+
+    class gem5_mm_maddubs_epi16(SSEOp):
+        op_class = 'SimdMultOp'
+        code = '''
+            for(int i=0; i<8; i++) {
+                int16_t res1 =
+                    Iu8x16Src1_ub16[2*i  ] * Is8x16Src2_sb16[2*i  ];
+                int16_t res2 =
+                    Iu8x16Src1_ub16[2*i+1] * Is8x16Src2_sb16[2*i+1];
+                Is16x8Dest_sw8[i] = sadd16(res1, res2);
+            }
+        '''
+
+    class gem5_mm_cvtepi8_epi16(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi8_epi16, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Is16x8Dest_sw8[i] = (int16_t) Is8x16Src1_sb16[i];
+        '''
+
+    class gem5_mm_cvtepu8_epi16(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepu8_epi16, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Iu16x8Dest_uw8[i] = (uint16_t) Iu8x16Src1_ub16[i];
+        '''
+
+    class gem5_mm_cvtepi8_epi32(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi8_epi32, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Is32x4Dest_sdw4[i] = (int32_t) Is8x16Src1_sb16[i];
+        '''
+
+    class gem5_mm_cvtepu8_epi32(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepu8_epi32, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] = (uint32_t) Iu8x16Src1_ub16[i];
+        '''
+
+    class gem5_mm_cvtepi8_epi64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi8_epi64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Is64x2Dest_sqw2[i] = (int64_t) Is8x16Src1_sb16[i];
+        '''
+
+    class gem5_mm_cvtepu8_epi64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepu8_epi64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Iu64x2Dest_uqw2[i] = (uint64_t) Iu8x16Src1_ub16[i];
+        '''
+
+    class gem5_mm_cvtepi16_epi32(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi16_epi32, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Is32x4Dest_sdw4[i] = (int32_t) Is16x8Src1_sw8[i];
+        '''
+
+    class gem5_mm_cvtepu16_epi32(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepu16_epi32, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] = (uint32_t) Iu16x8Src1_uw8[i];
+        '''
+
+    class gem5_mm_cvtepi16_epi64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi16_epi64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Is64x2Dest_sqw2[i] = (int64_t) Is16x8Src1_sw8[i];
+        '''
+
+    class gem5_mm_cvtepu16_epi64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepu16_epi64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu64x2Dest_uqw2[i] = (uint64_t) Iu16x8Src1_uw8[i];
+        '''
+
+    class gem5_mm_cvtepi32_epi64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi32_epi64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Is64x2Dest_sqw2[i] = (int64_t) Is32x4Src1_sdw4[i];
+        '''
+
+    class gem5_mm_cvtepu32_epi64(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepu32_epi64, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu64x2Dest_uqw2[i] = (uint64_t) Iu32x4Src1_udw4[i];
+        '''
+
+    class gem5_mm_cvtepi32_ps(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi32_ps, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = (float) Is32x4Src1_sdw4[i];
+        '''
+
+    class gem5_mm_cvtepi32_pd(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtepi32_pd, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = (double) Is32x4Src1_sdw4[i];
+        '''
+
+    class gem5_mm_cvtpi32_ps(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtpi32_ps, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            int32_t *arg1 =  (int32_t *) &FpSrcReg1_uqw;
+            for(int i=0; i<2; i++)
+                F32x4Dest_sf4[i] = (float) arg1[i];
+            for(int i=2; i<4; i++)
+                F32x4Dest_sf4[i] = F32x4Dest_sf4[i];
+        '''
+
+    class gem5_mm_cvtpi32_pd(SSEOp):
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cvtpi32_pd, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        op_class = 'SimdFloatCvtOp'
+        code = '''
+            int32_t *arg1 =  (int32_t *) &FpSrcReg1_uqw;
+            F64x2Dest_df2[0] = (double) arg1[0];
+            F64x2Dest_df2[1] = (double) arg1[1];
+        '''
+
+    class gem5_mm_insert_epi8(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu8x16Dest_ub16 = Iu8x16Dest_ub16;
+            Iu8x16Dest_ub16[imm8] = SrcReg1;
+        '''
+
+    class gem5_mm_insert_epi16(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu16x8Dest_uw8 = Iu16x8Dest_uw8;
+            Iu16x8Dest_uw8[imm8] = SrcReg1;
+        '''
+
+    class gem5_mm_insert_epi32(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu32x4Dest_udw4 = Iu32x4Dest_udw4;
+            Iu32x4Dest_udw4[imm8] = SrcReg1;
+        '''
+ 
+    class gem5_mm_insert_epi64(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            Iu64x2Dest_uqw2 = Iu64x2Dest_uqw2;
+            Iu64x2Dest_uqw2[imm8] = SrcReg1;
+        '''
+
+    class gem5_mm_insert_ps(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            uint8_t from = (ext >> 6) & mask(2);
+            uint8_t to   = (ext >> 4) & mask(2);
+            for(int i=0; i<4; i++) {
+                if( (ext >> i) & mask(1) )
+                    F32x4Dest_sf4[i] = 0.0;
+                else
+                    F32x4Dest_sf4[i] = (i == to) ?
+                            F32x4Src2_sf4[from] : F32x4Src1_sf4[i];
+            }
+        '''
+
+    class gem5_mm_extract_epi8(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            DestReg = 0;
+            DestReg = VecSrcReg1_ub[imm8];
+        '''
+
+    class gem5_mm_extract_epi16(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            DestReg = 0;
+            DestReg = VecSrcReg1_uw[imm8];
+        '''
+
+    class gem5_mm_extract_epi32(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            DestReg = 0;
+            DestReg = VecSrcReg1_udw[imm8];
+        '''
+
+    class gem5_mm_extract_epi64(SSEOp):
+        op_class = 'SimdAluOp'
+        code = 'DestReg = VecSrcReg1_uqw[imm8];'
+
+    class gem5_mm_extract_ps(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            DestReg = 0;
+            DestReg = Iu32x4Src1_udw4[op2_uqw & mask(2)];
+        '''
+
+    class gem5_mm_sign_epi8(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i=0; i<16; i++) {
+                int8_t arg1 = Is8x16Src1_sb16[i];
+                int8_t arg2 = Is8x16Src2_sb16[i];
+                Is8x16Dest_sb16[i] = ( arg2 >= 0 ) ? (arg1) : (-arg1);
+            }
+        '''
+
+    class gem5_mm_sign_epi16(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i=0; i<8; i++) {
+                int16_t arg1 = Is16x8Src1_sw8[i];
+                int16_t arg2 = Is16x8Src2_sw8[i];
+                Is16x8Dest_sw8[i] = ( arg2 >= 0 ) ? (arg1) : (-arg1);
+            }
+        '''
+
+    class gem5_mm_sign_epi32(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i=0; i<4; i++) {
+                int32_t arg1 = Is32x4Src1_sdw4[i];
+                int32_t arg2 = Is32x4Src2_sdw4[i];
+                Is32x4Dest_sdw4[i] = ( arg2 >= 0 ) ? (arg1) : (-arg1);
+            }
+        '''
+
+    class gem5_mm_abs_epi8(SSEOp):
+        op_class = 'SimdMiscOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_abs_epi8, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            for(int i=0; i<16; i++)
+                Is8x16Dest_sb16[i] = abs(Is8x16Src1_sb16[i]);
+        '''
+
+    class gem5_mm_abs_epi16(SSEOp):
+        op_class = 'SimdMiscOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_abs_epi16, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            for(int i=0; i<8; i++)
+                Is16x8Dest_sw8[i] = abs(Is16x8Src1_sw8[i]);
+        '''
+
+    class gem5_mm_abs_epi32(SSEOp):
+        op_class = 'SimdMiscOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_abs_epi32, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            for(int i=0; i<4; i++)
+                Is32x4Dest_sdw4[i] = abs(Is32x4Src1_sdw4[i]);
+        '''
+
+    class gem5_mm_dp_ps(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            auto arg1 = F32x4Src1_sf4;
+            auto arg2 = F32x4Src2_sf4;
+            float result = 0;
+            for(int i=0; i<4; i++)
+                if( (ext >> (i+4)) & mask(1) ) result += (arg1[i] * arg2[i]);
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = ((ext >> i) & mask(1)) ? result : 0;
+        '''
+
+    class gem5_mm_dp_pd(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            auto arg1 = F64x2Src1_df2;
+            auto arg2 = F64x2Src2_df2;
+            double result = 0;
+            for(int i=0; i<2; i++)
+                if( (ext >> (i+4)) & mask(1) ) result += (arg1[i] * arg2[i]);
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = ((ext >> i) & mask(1)) ? result : 0;
+        '''
+
+    class gem5_mm_blend_epi16(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<8; i++)
+                Iu16x8Dest_uw8[i] = ( (ext >> i) & mask(1) )
+                    ? (Iu16x8Src2_uw8[i]) : (Iu16x8Src1_uw8[i]);
+        '''
+
+    class gem5_mm_blend_ps(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                F32x4Dest_sf4[i] = ( (ext >> i) & mask(1) )
+                    ? (F32x4Src2_sf4[i]) : (F32x4Src1_sf4[i]);
+        '''
+
+    class gem5_mm_blend_pd(SSEOp):
+        op_class = 'SimdAluOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                F64x2Dest_df2[i] = ( (ext >> i) & mask(1) )
+                    ? (F64x2Src2_df2[i]) : (F64x2Src1_df2[i]);
+        '''
+
+    class gem5_mm_blendv_epi8(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i=0; i<16; i++)
+                Iu8x16Dest_ub16[i] = ( Xmm0_ub[i] & 0x80 )
+                    ? (Iu8x16Src2_ub16[i]) : (Iu8x16Src1_ub16[i]);
+        '''
+
+    class gem5_mm_blendv_ps(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i=0; i<4; i++)
+                Iu32x4Dest_udw4[i] = ( (Xmm0_udw[i] >> 31) & 0x1 ) ?
+                        (Iu32x4Src2_udw4[i]) : (Iu32x4Src1_udw4[i]);
+        '''
+
+    class gem5_mm_blendv_pd(SSEOp):
+        op_class = 'SimdMiscOp'
+        code = '''
+            for(int i=0; i<2; i++)
+                Iu64x2Dest_uqw2[i] = ( (Xmm0_uqw[i] >> 63) & 0x1 ) ?
+                        (Iu64x2Src2_uqw2[i]) : (Iu64x2Src1_uqw2[i]);
+        '''
+
+    class gem5_mm_mpsadbw_epu8(SSEOp):
+        op_class = 'SimdAddOp'
+        code = '''
+            DestReg = 0;
+            DestReg = Iu32x4Src1_udw4[op2_uqw & mask(2)];
+        '''
+
+    class gem5_mm_minpos_epu16(SSEOp):
+        op_class = 'SimdAluOp'
+        def __init__(self, dest, src, \
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_minpos_epu16, self).__init__(dest, src,\
+                    "InstRegIndex(0)", size, destSize, srcSize, ext)
+        code = '''
+            uint16_t res = 0xFFFF;
+            uint8_t idx = 0;
+            for(int i=0; i<8; i++) {
+                if( res > Iu16x8Src1_uw16[i] ) {
+                    res = Iu16x8Src1_uw16[i];
+                    idx = i;
+                }
+            }
+            Iu16x8Dest_uw8[0] = res;
+            Iu16x8Dest_uw8[1] = idx;
+        '''
+
+    class gem5_mm_testc_si128(SSEOp):
+        def __init__(self, src1, src2,\
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_testc_si128, self).__init__("InstRegIndex(0)", \
+                    src1, src2, size, destSize, srcSize, ext)
+        op_class = 'SimdAluOp'
+        code = '''
+            uint64_t result1 = 0, result2 = 0;
+            for(int i=0; i<2; i++) {
+                result1 |= (Iu64x2Src1_uqw2[i] & Iu64x2Src2_uqw2[i]);
+                result2 |= (~Iu64x2Src1_uqw2[i] & Iu64x2Src2_uqw2[i]);
+            }
+
+            ccFlagBits = ccFlagBits & ~(SFBit | AFBit | PFBit);
+            cfofBits   = cfofBits   & ~(OFBit);
+
+            ccFlagBits = (result1 == 0) ?
+                         (ccFlagBits | ZFBit) : (ccFlagBits & ~ZFBit);
+            cfofBits   = (result2 == 0) ?
+                         (cfofBits   | CFBit) : (cfofBits   & ~CFBit);
+        '''
+
+    class gem5_mm_cmpestri1(SSEOp):
+        op_class = 'SimdStringOp'
+        def __init__(self, src1, src2,\
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cmpestri1, self).__init__( \
+                    "InstRegIndex(INTREG_RCX)", \
+                    src1, src2, size, destSize, srcSize, ext)
+        code = '''
+            int32_t StrProto[16] = {0}, StrUndTst[16] = {0};
+            uint32_t maxstrlen = 0;
+            uint64_t strlen1 = Rax;
+            uint64_t strlen2 = Rdx;
+            uint8_t str1valid = 1, str2valid = 1;
+
+            // source data format
+            uint8_t *Iu8arg1 = NULL, *Iu8arg2 = NULL;
+            uint16_t *Iu16arg1 = NULL, *Iu16arg2 = NULL;
+            int8_t *Is8arg1 = NULL, *Is8arg2 = NULL;
+            int16_t *Is16arg1 = NULL, *Is16arg2 = NULL;
+            switch( ext & mask(2) ) {
+            case 0:
+                maxstrlen = 16;
+                Iu8arg1 = (uint8_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Iu8arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Iu8arg1[i];
+                }
+                Iu8arg2 = (uint8_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Iu8arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Iu8arg2[i];
+                }
+                break;
+            case 1:
+                maxstrlen = 8;
+                Iu16arg1 = (uint16_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Iu16arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Iu16arg1[i];
+                }
+                Iu16arg2 = (uint16_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Iu16arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Iu16arg2[i];
+                }
+                break;
+            case 2:
+                maxstrlen = 16;
+                Is8arg1 = (int8_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Is8arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Is8arg1[i];
+                }
+                Is8arg2 = (int8_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Is8arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Is8arg2[i];
+                }
+                break;
+            case 3:
+                maxstrlen = 8;
+                Is16arg1 = (int16_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Is16arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Is16arg1[i];
+                }
+                Is16arg2 = (int16_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Is16arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Is16arg2[i];
+                }
+                break;
+            }
+               
+            // Comparison type
+            uint16_t IntRes1 = 0;
+            switch( (ext >> 2) & mask(2)) {
+            case 0: // Subset
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1; i++)
+                        if( StrProto[i] != 0 && StrUndTst[j] != 0 )
+                            IntRes1 |= (StrProto[i] == StrUndTst[j]) << j;
+                break;
+            case 1: // Range
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1-1; i+=2)
+                        if( StrProto[i] != 0 && StrUndTst[j] != 0 )
+                            IntRes1 |= ( (StrProto[i] <= StrUndTst[j]) &&
+                                     (StrProto[i+1] >= StrUndTst[j]) ) << j;
+                break;
+            case 2: // Match
+                for(int i=0; i<min(strlen1, strlen2); i++)
+                    if( StrProto[i] != 0 && StrUndTst[i] != 0 )
+                        IntRes1 |= (StrProto[i] == StrUndTst[i]) << i;
+                for(int i=max(strlen1, strlen2); i<maxstrlen; i++)
+                    IntRes1 |= 1 << i;
+                break;
+            case 3: // Sub-string
+                int cnt = ( (strlen1 == 16) && (strlen2 == 16) ) ?
+                            ( 16 ) : (strlen2 - strlen1 + 1);
+                if( strlen2 >= strlen1 ) {
+                    for(int j=0; j<cnt; j++) {
+                        IntRes1 |= 1 << j;
+                        int k = j;
+                        for(int i=0; i<strlen1; i++) {
+                            if( StrProto[i] != 0 && StrUndTst[k] != 0 )
+                                IntRes1 &= ((StrProto[i] == StrUndTst[k])) << j;
+                            k++;
+                        }
+                    }
+                }
+                break;
+            }
+
+            // Post-processing Options
+            uint16_t IntRes2 = 0;
+            switch( (ext>>4) & mask(2)) {
+            case 0:
+            case 2:
+                IntRes2 = IntRes1;
+                break;
+            case 1:
+                IntRes2 = ~IntRes1;
+                break;
+            case 3:
+                IntRes2 = IntRes1 ^ mask(strlen2);
+                break;
+            }
+
+            DestReg = maxstrlen;
+            if( (ext >> 6) & mask(1) ) {
+                for(int i=maxstrlen-1; i>=0; i--)
+                    if( (IntRes2 >> i) & mask(1) ) {
+                        DestReg = i;
+                        break;
+                    }
+            }
+            else {
+                for(int i=0; i<maxstrlen; i++)
+                    if( (IntRes2 >> i) & mask(1) ) {
+                        DestReg = i;
+                        break;
+                    }
+            }
+
+            cfofBits = ( IntRes2 ) ? (cfofBits | CFBit) : (cfofBits & ~CFBit);
+            cfofBits = ( IntRes2 & mask(1) ) ?
+                           (cfofBits | OFBit) : (cfofBits & ~OFBit);
+            ccFlagBits = ( str1valid ) ?
+                             (ccFlagBits | SFBit) : (ccFlagBits & ~SFBit);
+            ccFlagBits = ( str2valid ) ?
+                             (ccFlagBits | ZFBit) : (ccFlagBits & ~ZFBit);
+            ccFlagBits = ccFlagBits & ~( AFBit | PFBit);
+        '''
+
+    class gem5_mm_cmpestrm(SSEOp):
+        op_class = 'SimdStringOp'
+        def __init__(self, src1, src2,\
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cmpestrm, self).__init__( \
+                    "InstRegIndex(VECTORREG_XMM0_BASE)", \
+                    src1, src2, size, destSize, srcSize, ext)
+        code = '''
+            int32_t StrProto[16] = {0}, StrUndTst[16] = {0};
+            uint32_t maxstrlen = 0;
+            uint64_t strlen1 = Rax;
+            uint64_t strlen2 = Rdx;
+            uint8_t str1valid = 1, str2valid = 1;
+
+            // source data format
+            uint8_t *Iu8arg1 = NULL, *Iu8arg2 = NULL;
+            uint16_t *Iu16arg1 = NULL, *Iu16arg2 = NULL;
+            int8_t *Is8arg1 = NULL, *Is8arg2 = NULL;
+            int16_t *Is16arg1 = NULL, *Is16arg2 = NULL;
+            switch( ext & mask(2) ) {
+            case 0:
+                maxstrlen = 16;
+                Iu8arg1 = (uint8_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Iu8arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Iu8arg1[i];
+                }
+                Iu8arg2 = (uint8_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Iu8arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Iu8arg2[i];
+                }
+                break;
+            case 1:
+                maxstrlen = 8;
+                Iu16arg1 = (uint16_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Iu16arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Iu16arg1[i];
+                }
+                Iu16arg2 = (uint16_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Iu16arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Iu16arg2[i];
+                }
+                break;
+            case 2:
+                maxstrlen = 16;
+                Is8arg1 = (int8_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Is8arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Is8arg1[i];
+                }
+                Is8arg2 = (int8_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Is8arg2[i] == 0 ) str1valid = 0;
+                    StrUndTst[i] = Is8arg2[i];
+                }
+                break;
+            case 3:
+                maxstrlen = 8;
+                Is16arg1 = (int16_t *) Iu64x2Src1_uqw2.data();
+                for(int i=0; i<strlen1; i++) {
+                    if( Is16arg1[i] == 0 ) str1valid = 0;
+                    StrProto[i] = Is16arg1[i];
+                }
+                Is16arg2 = (int16_t *) Iu64x2Src2_uqw2.data();
+                for(int i=0; i<strlen2; i++) {
+                    if( Is16arg2[i] == 0 ) str2valid = 0;
+                    StrUndTst[i] = Is16arg2[i];
+                }
+                break;
+            }
+               
+            // Comparison type
+            uint16_t IntRes1 = 0;
+            switch( (ext >> 2) & mask(2)) {
+            case 0: // Subset
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1; i++)
+                        if( StrProto[i] != 0 && StrUndTst[j] != 0 )
+                            IntRes1 |= (StrProto[i] == StrUndTst[j]) << j;
+                break;
+            case 1: // Range
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1-1; i+=2)
+                        if( StrProto[i] != 0 && StrUndTst[j] != 0 )
+                            IntRes1 |= ( (StrProto[i] <= StrUndTst[j]) &&
+                                     (StrProto[i+1] >= StrUndTst[j]) ) << j;
+                break;
+            case 2: // Match
+                for(int i=0; i<min(strlen1, strlen2); i++)
+                    if( StrProto[i] != 0 && StrUndTst[i] != 0 )
+                        IntRes1 |= (StrProto[i] == StrUndTst[i]) << i;
+                for(int i=max(strlen1, strlen2); i<maxstrlen; i++)
+                    IntRes1 |= 1 << i;
+                break;
+            case 3: // Sub-string
+                int cnt = ( (strlen1 == 16) && (strlen2 == 16) ) ?
+                            ( 16 ) : (strlen2 - strlen1 + 1);
+                if( strlen2 >= strlen1 ) {
+                    for(int j=0; j<cnt; j++) {
+                        IntRes1 |= 1 << j;
+                        int k = j;
+                        for(int i=0; i<strlen1; i++) {
+                            if( StrProto[i] != 0 && StrUndTst[k] != 0 )
+                                IntRes1 &= ((StrProto[i] == StrUndTst[k])) << j;
+                            k++;
+                        }
+                    }
+                }
+                break;
+            }
+
+            // Post-processing Options
+            uint16_t IntRes2 = 0;
+            switch( (ext>>4) & mask(2)) {
+            case 0:
+            case 2:
+                IntRes2 = IntRes1;
+                break;
+            case 1:
+                IntRes2 = ~IntRes1;
+                break;
+            case 3:
+                IntRes2 = IntRes1 ^ mask(strlen2);
+                break;
+            }
+
+            Iu8x16Dest_ub16 = {0};
+            if( (ext >> 6) & mask(1) ) {
+                if( maxstrlen == 16 )
+                    for(int i=0; i<maxstrlen; i++)
+                        Iu8x16Dest_ub16[i] =
+                            ( (IntRes2 >> i) & mask(1) ) ?  ( 0xFF ) : ( 0 );
+                else
+                    for(int i=0; i<maxstrlen; i+=2) {
+                        Iu8x16Dest_ub16[i] =
+                            ( (IntRes2 >> i) & mask(1) ) ?  ( 0xFF ) : ( 0 );
+                        Iu8x16Dest_ub16[i+1] = Iu8x16Dest_ub16[i];
+                    }
+            }
+            else {
+                if( maxstrlen == 16 ) {
+                    Iu8x16Dest_ub16[0] = IntRes2 & 0xFF;
+                    Iu8x16Dest_ub16[1] = (IntRes2 >> 8) & 0xFF;
+                }
+                else
+                    Iu8x16Dest_ub16[0] = IntRes2 & 0xFF;
+            }
+
+            cfofBits = ( IntRes2 ) ? (cfofBits | CFBit) : (cfofBits & ~CFBit);
+            cfofBits = ( IntRes2 & mask(1) ) ?
+                           (cfofBits | OFBit) : (cfofBits & ~OFBit);
+            ccFlagBits = ( str1valid ) ?
+                             (ccFlagBits | SFBit) : (ccFlagBits & ~SFBit);
+            ccFlagBits = ( str2valid ) ?
+                             (ccFlagBits | ZFBit) : (ccFlagBits & ~ZFBit);
+            ccFlagBits = ccFlagBits & ~( AFBit | PFBit);
+        '''
+
+    class gem5_mm_cmpistri1(SSEOp):
+        op_class = 'SimdStringOp'
+        def __init__(self, src1, src2,\
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cmpistri1, self).__init__( \
+                    "InstRegIndex(INTREG_RCX)", \
+                    src1, src2, size, destSize, srcSize, ext)
+        code = '''
+            int32_t StrProto[16] = {0}, StrUndTst[16] = {0};
+            uint32_t maxstrlen = 0, strlen1 = 0, strlen2 = 0;
+
+            // source data format
+            uint8_t *Iu8arg1 = NULL, *Iu8arg2 = NULL;
+            uint16_t *Iu16arg1 = NULL, *Iu16arg2 = NULL;
+            int8_t *Is8arg1 = NULL, *Is8arg2 = NULL;
+            int16_t *Is16arg1 = NULL, *Is16arg2 = NULL;
+            switch( ext & mask(2) ) {
+            case 0:
+                maxstrlen = 16;
+                Iu8arg1 = (uint8_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Iu8arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Iu8arg1[strlen1];
+                }
+                Iu8arg2 = (uint8_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Iu8arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Iu8arg2[strlen2];
+                }
+                break;
+            case 1:
+                maxstrlen = 8;
+                Iu16arg1 = (uint16_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Iu16arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Iu16arg1[strlen1];
+                }
+                Iu16arg2 = (uint16_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Iu16arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Iu16arg2[strlen2];
+                }
+                break;
+            case 2:
+                maxstrlen = 16;
+                Is8arg1 = (int8_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Is8arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Is8arg1[strlen1];
+                }
+                Is8arg2 = (int8_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Is8arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Is8arg2[strlen2];
+                }
+                break;
+            case 3:
+                maxstrlen = 8;
+                Is16arg1 = (int16_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Is16arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Is16arg1[strlen1];
+                }
+                Is16arg2 = (int16_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Is16arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Is16arg2[strlen2];
+                }
+                break;
+            }
+               
+            // Comparison type
+            uint16_t IntRes1 = 0;
+            switch( (ext >> 2) & mask(2)) {
+            case 0: // Subset
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1; i++)
+                        IntRes1 |= (StrProto[i] == StrUndTst[j]) << j;
+                break;
+            case 1: // Range
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1-1; i+=2)
+                        IntRes1 |= ( (StrProto[i] <= StrUndTst[j]) &&
+                                     (StrProto[i+1] >= StrUndTst[j]) ) << j;
+                break;
+            case 2: // Match
+                for(int i=0; i<min(strlen1, strlen2); i++)
+                    IntRes1 |= (StrProto[i] == StrUndTst[i]) << i;
+                for(int i=max(strlen1, strlen2); i<maxstrlen; i++)
+                    IntRes1 |= 1 << i;
+                break;
+            case 3: // Sub-string
+                int cnt = ( (strlen1 == 16) && (strlen2 == 16) ) ?
+                            ( 16 ) : (strlen2 - strlen1 + 1);
+                if( strlen2 >= strlen1 ) {
+                    for(int j=0; j<cnt; j++) {
+                        IntRes1 |= 1 << j;
+                        int k = j;
+                        for(int i=0; i<strlen1; i++) {
+                            IntRes1 &= ((StrProto[i] == StrUndTst[k])) << j;
+                            k++;
+                        }
+                    }
+                }
+                break;
+            }
+
+            // Post-processing Options
+            uint16_t IntRes2 = 0;
+            switch( (ext>>4) & mask(2)) {
+            case 0:
+            case 2:
+                IntRes2 = IntRes1;
+                break;
+            case 1:
+                IntRes2 = ~IntRes1;
+                break;
+            case 3:
+                IntRes2 = IntRes1 ^ mask(strlen2);
+                break;
+            }
+
+            DestReg = maxstrlen;
+            if( (ext >> 6) & mask(1) ) {
+                for(int i=maxstrlen-1; i>=0; i--)
+                    if( (IntRes2 >> i) & mask(1) ) {
+                        DestReg = i;
+                        break;
+                    }
+            }
+            else {
+                for(int i=0; i<maxstrlen; i++)
+                    if( (IntRes2 >> i) & mask(1) ) {
+                        DestReg = i;
+                        break;
+                    }
+            }
+
+            cfofBits = ( IntRes2 ) ? (cfofBits | CFBit) : (cfofBits & ~CFBit);
+            cfofBits = (IntRes2 & mask(1)) ?
+                           (cfofBits | OFBit) : (cfofBits & ~OFBit);
+            ccFlagBits = ( strlen1 < maxstrlen ) ?
+                             (ccFlagBits | SFBit) : (ccFlagBits & ~SFBit);
+            ccFlagBits = ( strlen2 < maxstrlen ) ?
+                             (ccFlagBits | ZFBit) : (ccFlagBits & ~ZFBit);
+            ccFlagBits = ccFlagBits & ~( AFBit | PFBit);
+        '''
+
+    class gem5_mm_cmpistrm(SSEOp):
+        op_class = 'SimdStringOp'
+        def __init__(self, src1, src2,\
+                size = None, destSize = None, srcSize = None, ext = None):
+            super(gem5_mm_cmpistrm, self).__init__( \
+                    "InstRegIndex(VECTORREG_XMM0_BASE)", \
+                    src1, src2, size, destSize, srcSize, ext)
+        code = '''
+            int32_t StrProto[16] = {0}, StrUndTst[16] = {0};
+            uint32_t maxstrlen = 0, strlen1 = 0, strlen2 = 0;
+
+            // source data format
+            uint8_t *Iu8arg1 = NULL, *Iu8arg2 = NULL;
+            uint16_t *Iu16arg1 = NULL, *Iu16arg2 = NULL;
+            int8_t *Is8arg1 = NULL, *Is8arg2 = NULL;
+            int16_t *Is16arg1 = NULL, *Is16arg2 = NULL;
+            switch( ext & mask(2) ) {
+            case 0:
+                maxstrlen = 16;
+                Iu8arg1 = (uint8_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Iu8arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Iu8arg1[strlen1];
+                }
+                Iu8arg2 = (uint8_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Iu8arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Iu8arg2[strlen2];
+                }
+                break;
+            case 1:
+                maxstrlen = 8;
+                Iu16arg1 = (uint16_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Iu16arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Iu16arg1[strlen1];
+                }
+                Iu16arg2 = (uint16_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Iu16arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Iu16arg2[strlen2];
+                }
+                break;
+            case 2:
+                maxstrlen = 16;
+                Is8arg1 = (int8_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Is8arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Is8arg1[strlen1];
+                }
+                Is8arg2 = (int8_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Is8arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Is8arg2[strlen2];
+                }
+                break;
+            case 3:
+                maxstrlen = 8;
+                Is16arg1 = (int16_t *) Iu64x2Src1_uqw2.data();
+                for(strlen1=0; strlen1<maxstrlen; strlen1++) {
+                    if( Is16arg1[strlen1] == 0 ) break;
+                    StrProto[strlen1] = Is16arg1[strlen1];
+                }
+                Is16arg2 = (int16_t *) Iu64x2Src2_uqw2.data();
+                for(strlen2=0; strlen2<maxstrlen; strlen2++) {
+                    if( Is16arg2[strlen2] == 0 ) break;
+                    StrUndTst[strlen2] = Is16arg2[strlen2];
+                }
+                break;
+            }
+
+            // Comparison type
+            uint16_t IntRes1 = 0;
+            switch( (ext >> 2) & mask(2)) {
+            case 0: // Subset
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1; i++)
+                        if( StrProto[i] != 0 && StrUndTst[j] != 0 )
+                            IntRes1 |= (StrProto[i] == StrUndTst[j]) << j;
+                break;
+            case 1: // Range
+                for(int j=0; j<strlen2; j++)
+                    for(int i=0; i<strlen1-1; i+=2)
+                        if( StrProto[i] != 0 && StrUndTst[j] != 0 )
+                            IntRes1 |= ( (StrProto[i] <= StrUndTst[j]) &&
+                                     (StrProto[i+1] >= StrUndTst[j]) ) << j;
+                break;
+            case 2: // Match
+                for(int i=0; i<min(strlen1, strlen2); i++)
+                    if( StrProto[i] != 0 && StrUndTst[i] != 0 )
+                        IntRes1 |= (StrProto[i] == StrUndTst[i]) << i;
+                for(int i=max(strlen1, strlen2); i<maxstrlen; i++)
+                    IntRes1 |= 1 << i;
+                break;
+            case 3: // Sub-string
+                int cnt = ( (strlen1 == 16) && (strlen2 == 16) ) ?
+                            ( 16 ) : (strlen2 - strlen1 + 1);
+                if( strlen2 >= strlen1 ) {
+                    for(int j=0; j<cnt; j++) {
+                        IntRes1 |= 1 << j;
+                        int k = j;
+                        for(int i=0; i<strlen1; i++) {
+                            if( StrProto[i] != 0 && StrUndTst[k] != 0 )
+                                IntRes1 &= ((StrProto[i] == StrUndTst[k])) << j;
+                            k++;
+                        }
+                    }
+                }
+                break;
+            }
+
+            // Post-processing Options
+            uint16_t IntRes2 = 0;
+            switch( (ext>>4) & mask(2)) {
+            case 0:
+            case 2:
+                IntRes2 = IntRes1;
+                break;
+            case 1:
+                IntRes2 = ~IntRes1;
+                break;
+            case 3:
+                IntRes2 = IntRes1 ^ mask(strlen2);
+                break;
+            }
+
+            Iu8x16Dest_ub16 = {0};
+            if( (ext >> 6) & mask(1) ) {
+                if( maxstrlen == 16 )
+                    for(int i=0; i<maxstrlen; i++)
+                        Iu8x16Dest_ub16[i] =
+                            ( (IntRes2 >> i) & mask(1) ) ?  ( 0xFF ) : ( 0 );
+                else
+                    for(int i=0; i<maxstrlen; i+=2) {
+                        Iu8x16Dest_ub16[i] =
+                            ( (IntRes2 >> i) & mask(1) ) ?  ( 0xFF ) : ( 0 );
+                        Iu8x16Dest_ub16[i+1] = Iu8x16Dest_ub16[i];
+                    }
+            }
+            else {
+                if( maxstrlen == 16 ) {
+                    Iu8x16Dest_ub16[0] = IntRes2 & 0xFF;
+                    Iu8x16Dest_ub16[1] = (IntRes2 >> 8) & 0xFF;
+                }
+                else
+                    Iu8x16Dest_ub16[0] = IntRes2 & 0xFF;
+            }
+
+            cfofBits = ( IntRes2 ) ? (cfofBits | CFBit) : (cfofBits & ~CFBit);
+            cfofBits = ( IntRes2 & mask(1) ) ?
+                           (cfofBits | OFBit) : (cfofBits & ~OFBit);
+            ccFlagBits = ( strlen1 < maxstrlen ) ?
+                             (ccFlagBits | SFBit) : (ccFlagBits & ~SFBit);
+            ccFlagBits = ( strlen2 < maxstrlen ) ?
+                             (ccFlagBits | ZFBit) : (ccFlagBits & ~ZFBit);
+            ccFlagBits = ccFlagBits & ~( AFBit | PFBit);
+        '''
+
+}};
